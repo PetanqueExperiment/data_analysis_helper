@@ -4,6 +4,7 @@ if TYPE_CHECKING:
     from .plotlive_loader import ExperimentData
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 
 class DataPlotter():
 
@@ -31,7 +32,7 @@ class DataPlotter():
             np.array(recapture[mask], dtype=float),
             marker='o',
             linestyle='-',
-            label=exp.folder_name
+            label=Path(exp.folder_name).name
         )
         plt.title("Recapture")
         plt.ylabel("Recapture Probability")
@@ -50,7 +51,7 @@ class DataPlotter():
             np.array(loading[mask], dtype=float),
             marker='o',
             linestyle='-',
-            label=exp.folder_name
+            label=Path(exp.folder_name).name
         )
         plt.title("Loading")
         plt.ylabel("Loading Probability")
@@ -103,12 +104,66 @@ class DataPlotter():
         ax_both.legend(loc='best')
 
         # Above / below (right, stacked)
-        ax_above.errorbar(x_above, y_above, yerr=yerr_above, label=exp.folder_name, **err_kw)
+        ax_above.errorbar(x_above, y_above, yerr=yerr_above, label=Path(exp.folder_name).name, **err_kw)
         ax_above.grid(True, linestyle='--', alpha=0.6)
 
         ax_below.errorbar(
-            x_below, y_below, yerr=yerr_below, label=exp.folder_name,
+            x_below, y_below, yerr=yerr_below, label=Path(exp.folder_name).name,
             color=plt.cm.tab20.colors[3], markeredgecolor=plt.cm.tab20.colors[2], **err_kw,
         )
         ax_below.set_xlabel(xlabel)
+        ax_below.grid(True, linestyle='--', alpha=0.6)
+
+    def plot_fluo_recapture(self, exp : ExperimentData, threshold=212, threshold_loading=None, threshold_recapture=None):
+        if threshold_loading == None and threshold_recapture == None:
+            threshold_loading = threshold
+            threshold_recapture = threshold
+        elif threshold_loading == None or threshold_recapture == None:
+            raise TypeError("Both or no recapture and loading threshold need to be provided")
+        
+        data_img_0 = exp.data_array[:, :, 0, :]
+        data_img_1 = exp.data_array[:, :, 1, :]
+
+        loaded      = data_img_0 > threshold_loading
+        recaptured  = np.logical_and(data_img_1 > threshold_recapture, loaded)
+        empty       = data_img_1 < threshold_recapture
+
+        recap_fluo = np.where(recaptured, data_img_1, np.nan)
+        recap_fluo_mean = np.nanmean(recap_fluo, axis=(1, 2))
+        recap_fluo_std  = np.nanstd(recap_fluo, axis=(1, 2))
+
+        background = np.where(empty, data_img_1, np.nan)
+        background_mean = np.nanmean(background, axis=(1, 2))
+        background_std  = np.nanstd(background, axis=(1, 2))
+
+        parameters = exp.param_sets_array[:, 0]
+
+        fig = plt.figure()
+        gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.35, wspace=0.3)
+        fig.suptitle(f"Recapture fluo, {exp.folder_name}")
+        ax_both = fig.add_subplot(gs[:, 0])
+        ax_above = fig.add_subplot(gs[0, 1])
+        ax_below = fig.add_subplot(gs[1, 1], sharex=ax_above)
+
+        err_kw = dict(fmt='o-', capsize=3, elinewidth=1)
+
+        # Combined plot (left)
+        ax_both.errorbar(parameters, recap_fluo_mean, yerr=recap_fluo_std, label="Recaptured", **err_kw)
+        ax_both.errorbar(parameters, background_mean, yerr=background_std, label="Background", **err_kw)
+        ax_both.axhline(threshold_recapture, color='gray', linestyle='--', alpha=0.6, label=f"Threshold recapture = {threshold_recapture}")
+
+        ax_both.set_ylabel("Counts")
+        ax_both.set_xlabel(exp.parameters_labels[0])
+        ax_both.grid(True, linestyle='--', alpha=0.6)
+        ax_both.legend(loc=(0, -0.6))
+
+        # Above / below (right, stacked)
+        ax_above.errorbar(parameters, recap_fluo_mean, yerr=recap_fluo_std, label=Path(exp.folder_name).name, **err_kw)
+        ax_above.grid(True, linestyle='--', alpha=0.6)
+
+        ax_below.errorbar(
+            parameters, background_mean, yerr=background_std, label=Path(exp.folder_name).name,
+            color=plt.cm.tab20.colors[3], markeredgecolor=plt.cm.tab20.colors[2], **err_kw,
+        )
+        ax_below.set_xlabel(exp.parameters_labels[0])
         ax_below.grid(True, linestyle='--', alpha=0.6)
