@@ -30,6 +30,7 @@ DATA_SUBDIR = "data"  # subdirectory holding .npy files
 MANIFEST_NAME = "manifest.jsonl"
 ROIS_NAME = "rois.json"
 PARAM_TAG_SEPARATOR = ";"  # separates scan axes in a manifest tag
+DEFAULT_THRESHOLD = 217  # fluorescence counts separating "atom" from "no atom"
 
 
 class ExperimentData(DataPlotter):
@@ -67,6 +68,9 @@ class ExperimentData(DataPlotter):
         Shape of a single ``.npy`` file (inferred from the first manifest entry).
     param_sets_array, data_array : np.ndarray
         Scan values and fluorescence data; see ``read_data``.
+    threshold : int
+        Default fluorescence threshold used by the compute and plot methods
+        when no ``threshold`` argument is passed to them.
     """
 
     def __init__(
@@ -74,6 +78,7 @@ class ExperimentData(DataPlotter):
         folder_name: Union[str, os.PathLike],
         *,
         base_dir: Optional[Union[str, os.PathLike]] = None,
+        threshold: int = DEFAULT_THRESHOLD,
         print_summary: bool = True,
     ) -> None:
         """Load an experiment folder and populate all attributes.
@@ -85,9 +90,12 @@ class ExperimentData(DataPlotter):
             name under ``base_dir``.
         base_dir
             If given, ``folder_name`` is resolved as ``base_dir / folder_name``.
+        threshold
+            Default fluorescence threshold for this experiment.
         """
         self.folder_name = folder_name
         self.base_dir = base_dir
+        self.threshold = threshold
         self.experiment_folder_path = self._resolve_experiment_folder(
             folder_name, base_dir=base_dir
         )
@@ -112,7 +120,8 @@ class ExperimentData(DataPlotter):
         print(f"Parameter sets loaded: {self.total_nb_of_sets_of_params}")
         print(f"Data shape per parameter set: {self.data_shape_per_param_set}")
         print(f"param_sets_array shape: {self.param_sets_array.shape}")
-        print(f"data_array shape: {self.data_array.shape}, dtype: {self.data_array.dtype}")
+        print(f"data_array shape: {self.data_array.shape}, dtype: {self.data_array.dtype}, [param_set, shot, image, atom]")
+        print(f"Threshold: {self.threshold}")
         for axis in range(self.scan_nb_axes):
             label = self.parameters_labels[axis]
             values = self.get_scan_values(axis)
@@ -274,7 +283,12 @@ class ExperimentData(DataPlotter):
         data_array = np.stack(loaded_blocks)
         return param_sets_array, data_array
 
-    def compute_loading_array(self, threshold: np.int32) -> np.ndarray:
+    def resolve_threshold(self, threshold: Optional[int] = None) -> int:
+        """Return ``threshold`` if given, otherwise this experiment's ``self.threshold``."""
+        return self.threshold if threshold is None else threshold
+
+    def compute_loading_array(self, threshold: Optional[int] = None) -> np.ndarray:
+        threshold = self.resolve_threshold(threshold)
         loading_array = np.full(self.total_nb_of_sets_of_params, None, dtype=object)
         n_shots = self.data_shape_per_param_set[0]
 
@@ -298,7 +312,8 @@ class ExperimentData(DataPlotter):
 
         return loading_array
 
-    def compute_recapture_array(self, threshold: np.int32) -> np.ndarray:
+    def compute_recapture_average(self, threshold: Optional[int] = None) -> np.ndarray:
+        threshold = self.resolve_threshold(threshold)
         recapture_array = np.full(self.total_nb_of_sets_of_params, None, dtype=object)
         n_shots = self.data_shape_per_param_set[0]
 
@@ -326,9 +341,28 @@ class ExperimentData(DataPlotter):
             recapture_array[param_idx] = param_recap_proba
 
         return recapture_array
+    
+    def compute_recapture_per_atom(self, threshold: Optional[int] = None) -> np.ndarray:
+        threshold = self.resolve_threshold(threshold)
+        recapture_per_atom = np.full((self.total_nb_of_sets_of_params, self.atom_number), np.nan)
 
-    def auto_plot(self, threshold: np.int32) -> None:
-        recapture = self.compute_recapture_array(threshold)
+        for param_idx in range(self.total_nb_of_sets_of_params):
+            entry_data = self.data_array[param_idx]
+            if entry_data is None:
+                continue
+            
+            fluo_1 = entry_data[:, 0, :]
+            fluo_2 = entry_data[:, 1, :]
+
+            loaded  = fluo_1 > threshold
+            recap   = (fluo_2 > threshold) & loaded
+
+            recapture_per_atom[param_idx, :] = recap.sum(axis=0) / loaded.sum(axis=0)
+        
+        return recapture_per_atom
+
+    def auto_plot(self, threshold: Optional[int] = None) -> None:
+        recapture = self.compute_recapture_average(threshold)
         mask = np.array([value is not None for value in recapture], dtype=bool)
 
         plt.plot(
@@ -345,8 +379,24 @@ class ExperimentData(DataPlotter):
         plt.ylim(-0.03, 1.03)
         plt.xlabel(self.parameters_labels[0])
 
-
-if __name__ == "__main__":
-    experiment = ExperimentData("t2")
-    experiment.auto_plot(215)
-
+    def auto_plot_2d(self, threshold: Optional[int] = None) -> None:
+        if self.scan_nb_axes != 2:
+            raise ValueError(f"Expected 2 scan axes, got {self.scan_nb_axes}")
+        recapture = self.compute_recapture_average(threshold)
+        x_vals = self.get_scan_values(0)  # amplitude
+        y_vals = self.get_scan_values(1)  # time
+        grid = np.full((len(y_vals), len(x_vals)), np.nan)
+        x_to_i = {v: i for i, v in enumerate(x_vals)}
+        y_to_j = {v: j for j, v in enumerate(y_vals)}
+        for idx, z in enumerate(recapture):
+            if z is None:
+                continue
+            x, y = self.param_sets_array[idx]
+            grid[y_to_j[y], x_to_i[x]] = float(z)
+        fig, ax = plt.subplots(figsize=(8, 5))
+        mesh = ax.pcolormesh(x_vals, y_vals, grid, shading="auto", vmin=0, vmax=1)
+        fig.colorbar(mesh, ax=ax, label="Recapture Probability")
+        lab0, lab1 = self.parameters_labels[0], self.parameters_labels[1]
+        ax.set_xlabel(f"{lab0[0]} {lab0[1]}")
+        ax.set_ylabel(f"{lab1[0]} {lab1[1]}")
+        ax.set_title(Path(self.folder_name).name)
