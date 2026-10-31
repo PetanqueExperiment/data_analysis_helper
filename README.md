@@ -8,20 +8,16 @@ is required for plotting. The existing `py314` environment has these dependencie
 ## Release–recapture temperature fit
 
 ```python
-import numpy as np
 import matplotlib.pyplot as plt
-from scipy.constants import k
 from data_analysis_helper.release_recapture import (
     fit_release_recapture,
     plot_release_recapture_fit,
 )
 
-waist = 0.95e-6  # 1/e² intensity radius, m
 trap = dict(
-    mass=1.44316e-25,         # Rb-87, kg
-    waist=waist,
-    depth=k * 0.75e-3,       # positive trap depth, J
-    rayleigh=np.pi * waist**2 / 850e-9,  # m
+    waist_um=0.95,               # 1/e² intensity radius, μm
+    depth_MHz=15.627464342495682,  # U/h in MHz; equivalent to U/k = 0.75 mK
+    wavelength_nm=850,           # laser wavelength, nm
 )
 result = fit_release_recapture(
     exp.param_sets_array[:, 0],       # release time, μs
@@ -29,7 +25,6 @@ result = fit_release_recapture(
     **trap,
     samples=50_000,
     seed=42,
-    zero_point=True,
     temperature_bounds_uK=(0.1, 200.0),
 )
 print(result.summary())
@@ -41,6 +36,13 @@ plt.show()
 The fit accepts arrays independently of `ExperimentData`. It fits temperature
 and initial survival using unweighted least squares. Missing/nonfinite pairs are
 omitted and times are sorted. The fixed seed makes repeated fits reproducible.
+Rb-87 mass (`mass=1.44316e-25` kg) and `zero_point=True` are defaults and can
+be overridden. Use `waist_um` in μm and `wavelength_nm` in nm. Trap depth is
+`U/h` in MHz; the function converts lengths to metres and depth to joules,
+then derives the Rayleigh range internally.
+For existing calls, replace `depth` in joules with `depth_MHz = depth / (h * 1e6)`
+replace `waist` in metres with `waist_um = waist * 1e6`, and replace
+`rayleigh` with the laser `wavelength_nm` in nm.
 
 Useful result attributes:
 
@@ -67,21 +69,31 @@ near parameter bounds or zero-point saturation require care.
 ## Simulation alone
 
 ```python
+import numpy as np
 from data_analysis_helper.release_recapture import release_recapture
 
+# Same trap units and defaults as fit_release_recapture().
+simulation_trap = dict(
+    waist_um=0.95,
+    depth_MHz=15.627464342495682,  # U/h in MHz; equivalent to U/k = 0.75 mK
+    wavelength_nm=850,
+)
 probability, mc_stderr, initially_bound_fraction = release_recapture(
     50e-6,                  # temperature in K
     np.linspace(0, 50e-6, 101),  # release times in seconds
-    **trap,
+    **simulation_trap,
     samples=50_000,
     seed=42,
-    zero_point=True,
 )
 ```
 
+The simulator converts trap inputs to SI internally. Its temperature and time
+arguments remain in **kelvin and seconds**; the fitter takes times in μs and
+returns temperature in μK. Both default to Rb-87 mass and `zero_point=True`.
+
 The simulation uses harmonic thermal initial conditions, ballistic release,
 and an energy-based recapture test in a Gaussian tweezer. Its harmonic initial
-approximation requires `k*T << depth`. `zero_point=True` includes zero-point
+approximation requires `k*T << h*depth_MHz*1e6`. `zero_point=True` includes zero-point
 widths, with an approximate classical capture test near zero temperature.
 
 Add future analysis modules beside `release_recapture.py`, keeping calculations
@@ -90,5 +102,5 @@ independent of notebook globals and documenting input/output units.
 Run the focused checks from `DailyAnalysis`:
 
 ```sh
-python -m unittest discover -s tests -p 'test_release_recapture.py'
+python -m unittest discover -s data_analysis_helper/tests -p 'test_release_recapture.py'
 ```

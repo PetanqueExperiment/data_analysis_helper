@@ -1,6 +1,8 @@
 """Release–recapture simulation and temperature fitting.
 
-Simulation inputs use SI units; fitting uses microseconds and returns μK.
+Both simulation and fitting take depth U/h in MHz, waist in μm, and wavelength
+in nm. Simulation takes temperature in K and times in s; fitting takes times
+in μs and returns temperature in μK.
 The model uses harmonic thermal initial conditions in a Gaussian tweezer.
 """
 
@@ -9,7 +11,7 @@ import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.constants import hbar, k
+from scipy.constants import h, hbar, k
 from scipy.optimize import minimize_scalar
 from scipy.stats import t as student_t
 
@@ -21,22 +23,36 @@ def gaussian_tweezer_potential(positions, *, waist, depth, rayleigh):
         -2 * (x**2 + y**2) / (waist**2 * axial_factor)
     )
 
-def release_recapture(temperature, times, *, mass, waist, depth, rayleigh,
+def release_recapture(temperature, times, *, waist_um, depth_MHz, wavelength_nm,
+                      mass=1.44316e-25,
                       samples=50_000, seed=42, zero_point=True):
-    """Temperature in K, times in s. Return probability, MC standard error,
-    and the initially bound fraction. Accurate initial harmonic approximation
-    requires k*T << depth; the classical capture test is approximate near T=0.
+    """Simulate release–recapture with temperature in K and release times in s.
+
+    Trap inputs are the Gaussian 1/e² intensity waist ``waist_um`` in μm,
+    positive depth U/h ``depth_MHz`` in MHz (not angular frequency), and laser
+    ``wavelength_nm`` in nm. Internally, convert lengths to metres and depth
+    to joules, then derive the Rayleigh range as pi * waist**2 / wavelength.
+    ``mass`` is in kg and defaults to Rb-87 (1.44316e-25 kg).
+    ``zero_point=True`` includes zero-point widths; False uses classical widths.
+
+    Return probability, Monte Carlo standard error, and the initially bound
+    fraction. Accurate initial harmonic approximation requires k*T << depth_J;
+    the classical capture test is approximate near T=0.
     """
     times = np.asarray(times, dtype=float)
     if times.ndim != 1 or not np.all(np.isfinite(times)) or np.any(times < 0):
         raise ValueError("times must be a finite, nonnegative 1D array in seconds.")
     if not np.isfinite(temperature) or temperature < 0:
         raise ValueError("temperature must be finite and nonnegative, in kelvin.")
-    trap_values = np.array([mass, waist, depth, rayleigh], dtype=float)
+    trap_values = np.array([mass, waist_um, depth_MHz, wavelength_nm], dtype=float)
     if not np.all(np.isfinite(trap_values)) or np.any(trap_values <= 0):
-        raise ValueError("mass, waist, depth, and rayleigh must be finite and positive (SI units).")
+        raise ValueError("mass (kg), waist_um, depth_MHz, and wavelength_nm must be finite and positive.")
     if not isinstance(samples, (int, np.integer)) or samples < 1:
         raise ValueError("samples must be a positive integer.")
+    waist = waist_um * 1e-6
+    wavelength = wavelength_nm * 1e-9
+    depth = h * depth_MHz * 1e6
+    rayleigh = np.pi * waist**2 / wavelength
     frequencies = np.array([np.sqrt(4 * depth / (mass * waist**2))] * 2
                            + [np.sqrt(2 * depth / (mass * rayleigh**2))])
     if zero_point:
@@ -115,7 +131,8 @@ class ReleaseRecaptureFit:
         )
 
 
-def fit_release_recapture(time_us, recapture, *, mass, waist, depth, rayleigh,
+def fit_release_recapture(time_us, recapture, *, waist_um, depth_MHz, wavelength_nm,
+                          mass=1.44316e-25,
                           samples=50_000, seed=42, zero_point=True,
                           temperature_bounds_uK=(0.1, 200.0)):
     """Fit temperature and survival to ``survival * release_recapture(T, t)``.
@@ -126,12 +143,21 @@ def fit_release_recapture(time_us, recapture, *, mass, waist, depth, rayleigh,
         Release times in μs and average recapture probabilities. Accepts a
         1D scan or an (n, 1) column; paired nonfinite values are omitted and
         times are sorted. At least three valid points spanning times are needed.
-    mass, waist, depth, rayleigh : float
-        Atom mass (kg), 1/e² intensity waist (m), positive trap depth (J),
-        and Rayleigh range (m). These parameters are held fixed.
+    waist_um : float
+        Gaussian 1/e² intensity waist in micrometres (μm).
+    wavelength_nm : float
+        Laser wavelength in nanometres (nm). Both lengths are converted to
+        metres internally, then rayleigh = pi * waist**2 / wavelength.
+    depth_MHz : float
+        Positive trap depth U/h in MHz (ordinary frequency, not angular).
+        Converted internally to joules as h * depth_MHz * 1e6.
+    mass : float, optional
+        Atom mass in kg; defaults to Rb-87 (1.44316e-25 kg).
+        All trap parameters are held fixed during the fit.
     samples, seed, zero_point
         Simulation settings. An integer seed reuses the same trajectories
-        across evaluations for a deterministic objective.
+        across evaluations for a deterministic objective. zero_point defaults
+        to True; set False to use classical thermal widths.
     temperature_bounds_uK : pair of float
         Positive, increasing search limits in μK.
 
@@ -169,7 +195,9 @@ def fit_release_recapture(time_us, recapture, *, mass, waist, depth, rayleigh,
     if not isinstance(seed, (int, np.integer)) or seed < 0:
         raise ValueError('Use a nonnegative integer seed for deterministic fitting.')
 
-    simulation_args = dict(mass=mass, waist=waist, depth=depth, rayleigh=rayleigh,
+    # The simulator validates trap inputs and converts to SI units internally.
+    simulation_args = dict(mass=mass, waist_um=waist_um, depth_MHz=depth_MHz,
+                           wavelength_nm=wavelength_nm,
                            samples=samples, seed=seed, zero_point=zero_point)
 
     def probability_at(temperature_uK, times_us):
@@ -249,7 +277,7 @@ def plot_release_recapture_fit(result : ReleaseRecaptureFit, ax=None):
     """
     if ax is None:
         _, ax = plt.subplots(figsize=(7, 4.5))
-    ax.plot(result.time_us, result.data, 'o', markersize=4, label='Data')
+    ax.plot(result.time_us, result.data, 'o', markersize=4, label='Data', zorder=3)
     line, = ax.plot(result.curve_time_us, result.curve_probability, '-',
                     label=f'Release–recapture fit: T = {result.temperature_uK:.2f} '
                           f'± {result.parameter_stderr[0]:.2f} μK (1σ)')
