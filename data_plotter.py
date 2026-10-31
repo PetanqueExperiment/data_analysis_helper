@@ -172,19 +172,23 @@ class DataPlotter():
         pass
 
     def plot_recapture_per_atom(self, exp : ExperimentData, threshold=None, style="imshow", alpha:float=None):
-        recapture_per_atom = exp.compute_recapture_per_atom()
+        recapture_per_atom = exp.compute_recapture_per_atom(threshold)
 
         if self.scan_nb_axes > 1:
             raise ValueError(f"Expected 1 scan axis, got {self.scan_nb_axes}")
 
         style = style.lower()
         if style == "imshow" or style == "map" or style == "2d":
+            x = exp.param_sets_array[:, 0]
+            dx = np.diff(x).mean() if len(x) > 1 else 1
             plt.imshow(
                 recapture_per_atom.T,
-                extent=[exp.param_sets_array[0], exp.param_sets_array[-1],
-                        0, exp.atom_number],
-                aspect="auto"
+                origin="lower",
+                extent=[x[0] - dx / 2, x[-1] + dx / 2, -0.5, exp.atom_number - 0.5],
+                aspect="auto",
+                interpolation="nearest",
             )
+
             plt.xlabel(self.parameters_labels[0])
             plt.ylabel(f"Atom index")
             plt.colorbar(label="Recapture Probability")
@@ -200,3 +204,5 @@ class DataPlotter():
             plt.xlabel(self.parameters_labels[0])
             plt.ylabel(f"Recapture Probability")
             plt.title(Path(self.folder_name).name)
+
+        return recapture_per_atom
