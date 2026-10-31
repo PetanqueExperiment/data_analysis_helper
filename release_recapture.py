@@ -241,7 +241,7 @@ def fit_release_recapture(time_us, recapture, *, mass, waist, depth, rayleigh,
     )
 
 
-def plot_release_recapture_fit(result, ax=None):
+def plot_release_recapture_fit(result : ReleaseRecaptureFit, ax=None):
     """Plot data, fit, and the fitted-parameter 95% confidence band; return axes.
 
     Pass an existing Matplotlib axes to control figure size/style. This does
@@ -251,7 +251,8 @@ def plot_release_recapture_fit(result, ax=None):
         _, ax = plt.subplots(figsize=(7, 4.5))
     ax.plot(result.time_us, result.data, 'o', markersize=4, label='Data')
     line, = ax.plot(result.curve_time_us, result.curve_probability, '-',
-                    label=f'Release–recapture fit: T = {result.temperature_uK:.2f} μK')
+                    label=f'Release–recapture fit: T = {result.temperature_uK:.2f} '
+                          f'± {result.parameter_stderr[0]:.2f} μK (1σ)')
     ax.fill_between(result.curve_time_us, result.curve_ci95[0], result.curve_ci95[1],
                     color=line.get_color(), alpha=0.3, linewidth=0,
                     label='95% confidence band (fitted parameters)')
