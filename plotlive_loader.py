@@ -353,26 +353,54 @@ class ExperimentData(DataPlotter):
 
         return x, y
 
-    def auto_plot_2d(self, threshold: Optional[int] = None) -> None:
+    def auto_plot_2d(
+        self, threshold: Optional[int] = None, style: str = "imshow", x_axis: int = 0
+    ) -> None:
+        """Plot a 2-axis scan and return ``(x_vals, y_vals, grid)``.
+
+        ``style`` is ``"imshow"`` (or ``"map"``, ``"2d"``) for a heatmap, or
+        ``"1d"`` (or ``"plot"``, ``"curve"``) for superposed recapture curves,
+        one per value of the other scan axis. Missing points leave a gap in
+        their curve.
+
+        ``x_axis`` is the scan axis (0 or 1) drawn horizontally. The returned
+        ``x_vals`` follow it, and ``grid`` has shape ``(len(y_vals), len(x_vals))``.
+        """
         if self.scan_nb_axes != 2:
             raise ValueError(f"Expected 2 scan axes, got {self.scan_nb_axes}")
+        if x_axis not in (0, 1):
+            raise ValueError(f"x_axis must be 0 or 1, got {x_axis!r}")
+        y_axis = 1 - x_axis
         recapture = self.compute_recapture_average(threshold)
-        x_vals = self.get_scan_values(0)  # amplitude
-        y_vals = self.get_scan_values(1)  # time
+        x_vals = self.get_scan_values(x_axis)
+        y_vals = self.get_scan_values(y_axis)
         grid = np.full((len(y_vals), len(x_vals)), np.nan)
         x_to_i = {v: i for i, v in enumerate(x_vals)}
         y_to_j = {v: j for j, v in enumerate(y_vals)}
         for idx, z in enumerate(recapture):
             if z is None:
                 continue
-            x, y = self.param_sets_array[idx]
+            x, y = self.param_sets_array[idx, [x_axis, y_axis]]
             grid[y_to_j[y], x_to_i[x]] = float(z)
         fig, ax = plt.subplots(figsize=(8, 5))
-        mesh = ax.pcolormesh(x_vals, y_vals, grid, shading="auto", vmin=0, vmax=1)
-        fig.colorbar(mesh, ax=ax, label="Recapture Probability")
-        lab0, lab1 = self.parameters_labels[0], self.parameters_labels[1]
-        ax.set_xlabel(f"{lab0[0]} {lab0[1]}")
-        ax.set_ylabel(f"{lab1[0]} {lab1[1]}")
+        x_label = " ".join(self.parameters_labels[x_axis])
+        y_label = " ".join(self.parameters_labels[y_axis])
+        style = style.lower()
+        if style == "1d" or style == "plot" or style == "curve":
+            for y, row in zip(y_vals, grid):
+                ax.plot(x_vals, row, marker="o", linestyle="-", label=f"{y:g}")
+            ax.set_ylabel("Recapture Probability")
+            ax.set_ylim(-0.03, 1.03)
+            ax.grid(True, linestyle="--", alpha=0.6)
+            ax.legend(title=y_label, loc=(1.02, 0.0))
+        elif style == "imshow" or style == "map" or style == "2d":
+            mesh = ax.pcolormesh(x_vals, y_vals, grid, shading="auto", vmin=0, vmax=1)
+            fig.colorbar(mesh, ax=ax, label="Recapture Probability")
+            ax.set_ylabel(y_label)
+        else:
+            plt.close(fig)
+            raise ValueError(f"Unknown style: {style!r}")
+        ax.set_xlabel(x_label)
         ax.set_title(Path(self.folder_name).name)
 
         return x_vals, y_vals, grid
