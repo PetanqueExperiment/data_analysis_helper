@@ -165,10 +165,11 @@ def fit_release_recapture(time_us, recapture, *, waist_um, depth_MHz, wavelength
     -------
     ReleaseRecaptureFit
         Fitted parameters, covariance, 95% intervals, sorted data, and a dense
-        fitted curve with a pointwise 95% confidence band. No plotting or printing.
+        fitted curve with a pointwise 95% confidence band.
 
     Notes
     -----
+    Prints the fit summary and trap parameters after fitting.
     Uses unweighted least squares, a coarse temperature search, and bounded
     derivative-free refinement. Uncertainty is the local linear approximation
     from fit residuals, including temperature–survival covariance. It assumes
@@ -259,7 +260,8 @@ def fit_release_recapture(time_us, recapture, *, waist_um, depth_MHz, wavelength
     if near_bound:
         warnings.warn('Fit is near a parameter bound; symmetric confidence intervals may be unreliable.',
                       RuntimeWarning, stacklevel=2)
-    return ReleaseRecaptureFit(
+
+    result = ReleaseRecaptureFit(
         temperature_uK=float(temperature_uK), survival=float(survival),
         parameter_covariance=covariance, parameter_ci95=parameter_ci95,
         time_us=time_us, data=data, curve_time_us=curve_time_us,
@@ -267,6 +269,10 @@ def fit_release_recapture(time_us, recapture, *, waist_um, depth_MHz, wavelength
         curve_mc_stderr=survival * mc_stderr, residual_sse=float(residual_sse),
         near_bound=near_bound,
     )
+    print(result.summary())
+    print(f'Trap depth U/h: {depth_MHz:.3f} MHz; '
+          f'waist: {waist_um:.2f} μm; wavelength: {wavelength_nm:.0f} nm')
+    return result
 
 
 def plot_release_recapture_fit(result : ReleaseRecaptureFit, ax=None):
