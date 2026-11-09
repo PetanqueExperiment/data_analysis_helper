@@ -1,4 +1,7 @@
-"""Functions for live plotting 
+"""Fit models for experiment signals (Rabi oscillations, Ramsey spectroscopy).
+
+Plain NumPy functions with the ``f(x, *params)`` signature expected by
+``scipy.optimize.curve_fit``.
 """
 import numpy as np
 

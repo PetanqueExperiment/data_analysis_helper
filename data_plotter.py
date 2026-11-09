@@ -1,4 +1,4 @@
-"""Plotting functions for :class:`~data_analysis_helper.plotlive_loader.ExperimentData`.
+"""Plotting functions for :class:`~data_analysis_helper.experiment.ExperimentData`.
 
 Every function takes the experiment as its first argument and never calls
 ``show()``. The helpers only decide *what* is drawn (data, axis labels,
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
 
-    from .plotlive_loader import ExperimentData
+    from .experiment import ExperimentData
 
 __all__ = [
     "plot_recapture",
