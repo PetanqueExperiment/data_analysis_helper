@@ -20,11 +20,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
-import matplotlib.pyplot as plt
-import numpy as np
+from typing import Optional, Tuple, Union
 
-from .data_plotter import *
+import numpy as np
 
 DATA_SUBDIR = "data"  # subdirectory holding .npy files
 MANIFEST_NAME = "manifest.jsonl"
@@ -33,8 +31,11 @@ PARAM_TAG_SEPARATOR = ";"  # separates scan axes in a manifest tag
 DEFAULT_THRESHOLD = 217  # fluorescence counts separating "atom" from "no atom"
 
 
-class ExperimentData(DataPlotter):
+class ExperimentData:
     """Load metadata and fluorescence arrays from a single PyCam experiment folder.
+
+    Plotting lives in :mod:`data_analysis_helper.data_plotter`; its functions
+    take an ``ExperimentData`` as first argument.
 
     On construction, resolves the folder path, reads the manifest and ROIs,
     and builds two main arrays:
@@ -330,41 +331,14 @@ class ExperimentData(DataPlotter):
         
         return recapture_per_atom
 
-    def auto_plot(self, threshold: Optional[int] = None) -> None:
-        recapture = self.compute_recapture_average(threshold)
-        mask = np.array([value is not None for value in recapture], dtype=bool)
+    def compute_recapture_grid(
+        self, threshold: Optional[int] = None, *, x_axis: int = 0
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Arrange the average recapture of a 2-axis scan on a grid.
 
-        x = self.param_sets_array[mask, 0]
-        y = np.array(recapture[mask], dtype=float)
-
-        plt.plot(
-            x,
-            y,
-            marker='o',
-            linestyle='-',
-            label=self.folder_name
-        )
-
-        plt.ylabel("Recapture Probability")
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.legend(loc=(1.02, 0.0))
-        plt.ylim(-0.03, 1.03)
-        plt.xlabel(self.parameters_labels[0])
-
-        return x, y
-
-    def auto_plot_2d(
-        self, threshold: Optional[int] = None, style: str = "imshow", x_axis: int = 0
-    ) -> None:
-        """Plot a 2-axis scan and return ``(x_vals, y_vals, grid)``.
-
-        ``style`` is ``"imshow"`` (or ``"map"``, ``"2d"``) for a heatmap, or
-        ``"1d"`` (or ``"plot"``, ``"curve"``) for superposed recapture curves,
-        one per value of the other scan axis. Missing points leave a gap in
-        their curve.
-
-        ``x_axis`` is the scan axis (0 or 1) drawn horizontally. The returned
-        ``x_vals`` follow it, and ``grid`` has shape ``(len(y_vals), len(x_vals))``.
+        ``x_axis`` (0 or 1) is the scan axis along the grid columns. Returns
+        ``(x_vals, y_vals, grid)`` with sorted unique scan values and ``grid``
+        of shape ``(len(y_vals), len(x_vals))``; missing points are NaN.
         """
         if self.scan_nb_axes != 2:
             raise ValueError(f"Expected 2 scan axes, got {self.scan_nb_axes}")
@@ -382,25 +356,4 @@ class ExperimentData(DataPlotter):
                 continue
             x, y = self.param_sets_array[idx, [x_axis, y_axis]]
             grid[y_to_j[y], x_to_i[x]] = float(z)
-        fig, ax = plt.subplots(figsize=(8, 5))
-        x_label = " ".join(self.parameters_labels[x_axis])
-        y_label = " ".join(self.parameters_labels[y_axis])
-        style = style.lower()
-        if style == "1d" or style == "plot" or style == "curve":
-            for y, row in zip(y_vals, grid):
-                ax.plot(x_vals, row, marker="o", linestyle="-", label=f"{y:g}")
-            ax.set_ylabel("Recapture Probability")
-            ax.set_ylim(-0.03, 1.03)
-            ax.grid(True, linestyle="--", alpha=0.6)
-            ax.legend(title=y_label, loc=(1.02, 0.0))
-        elif style == "imshow" or style == "map" or style == "2d":
-            mesh = ax.pcolormesh(x_vals, y_vals, grid, shading="auto", vmin=0, vmax=1)
-            fig.colorbar(mesh, ax=ax, label="Recapture Probability")
-            ax.set_ylabel(y_label)
-        else:
-            plt.close(fig)
-            raise ValueError(f"Unknown style: {style!r}")
-        ax.set_xlabel(x_label)
-        ax.set_title(Path(self.folder_name).name)
-
         return x_vals, y_vals, grid

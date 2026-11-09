@@ -1,208 +1,323 @@
+"""Plotting functions for :class:`~data_analysis_helper.plotlive_loader.ExperimentData`.
+
+Every function takes the experiment as its first argument and never calls
+``show()``. The helpers only decide *what* is drawn (data, axis labels,
+titles, legend entries). All styling (markers, line styles, colors, grid,
+font sizes, figure size, legend placement, axis limits, ...) is left to the
+caller, through Matplotlib rcParams / style sheets, the ``**kwargs`` forwarded
+to the underlying Matplotlib call, or the returned axes.
+
+- Single-axes plots accept ``ax`` and return it. With ``ax=None``, curves draw
+  on the current axes, so successive calls overlay several experiments; maps
+  of a 2-axis scan open a new figure.
+- Multi-panel plots accept ``fig`` (a new figure if None) and return it.
+
+Example::
+
+    from data_analysis_helper.data_plotter import *
+
+    plt.style.use("my_lab.mplstyle")       # or plt.rcParams.update({...})
+
+    for exp in experiments:                # overlay several 1D scans
+        plot_recapture(exp, marker="o")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    plot_recapture(exp, ax=ax1)
+    plot_loading(exp, ax=ax2, color="C3")
+
+    x, y, grid = exp.compute_recapture_grid(x_axis=1)   # data behind a 2D plot
+    plot_recapture_2d(exp, style="curve", x_axis=1)
+"""
+
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any
-if TYPE_CHECKING:
-    from .plotlive_loader import ExperimentData
+
+import warnings
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Tuple
+
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
 
-class DataPlotter():
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
 
-    def plot_recapture(self, exp : ExperimentData, threshold=None):
-        """
-        Plot the recapture probability for an experiment as a function of the scanned parameter. (only works for 1D scan)
+    from .plotlive_loader import ExperimentData
 
-        Parameters
-        ----------
-        self : DataPlotter
-            The instance of the DataPlotter class.
-        exp : ExperimentData
-            The experimental data object containing data arrays and labels.
-        threshold : int, optional
-            The fluorescence threshold used to compute the recapture array (default is ``exp.threshold``).
+__all__ = [
+    "plot_recapture",
+    "plot_loading",
+    "plot_fluorescence",
+    "plot_fluo_recapture",
+    "plot_recapture_per_atom",
+    "plot_recapture_2d",
+]
 
-        This method plots the recapture probability versus the first parameter in the parameter set array,
-        masking any values where the recapture probability is None.
-        """
-        recapture = exp.compute_recapture_average(threshold)
-        mask = np.array([value is not None for value in recapture], dtype=bool)
+# Accepted spellings of the two plot kinds, mapped to their canonical name.
+_STYLE_ALIASES = {
+    "map": "map", "imshow": "map", "2d": "map",
+    "curve": "curve", "1d": "curve", "plot": "curve",
+}
 
-        plt.plot(
-            exp.param_sets_array[mask, 0],
-            np.array(recapture[mask], dtype=float),
-            marker='o',
-            linestyle='-',
-            label=Path(exp.folder_name).name
-        )
-        plt.title("Recapture")
-        plt.ylabel("Recapture Probability")
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.legend(loc=(1.02, 0.0))
-        plt.ylim(-0.03, 1.03)
-        plt.xlabel(exp.parameters_labels[0])
+# (x, y, yerr, label) for one errorbar series.
+_Series = Tuple[np.ndarray, np.ndarray, np.ndarray, str]
 
-    def plot_loading(self, exp : ExperimentData, threshold=None):
-        loading = exp.compute_loading_array(threshold=threshold)
-        mask = np.array([value is not None for value in loading], dtype=bool)
 
-        plt.plot(
-            exp.param_sets_array[mask, 0],
-            np.array(loading[mask], dtype=float),
-            marker='o',
-            linestyle='-',
-            label=Path(exp.folder_name).name
-        )
-        plt.title("Loading")
-        plt.ylabel("Loading Probability")
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.legend(loc=(1.02, 0.0))
-        plt.ylim(-0.03, 1.03)
-        plt.xlabel(exp.parameters_labels[0])
+# --------------------------------------------------------------------------- #
+# Small helpers
+# --------------------------------------------------------------------------- #
 
-    def plot_fluorescence(self, exp : ExperimentData, image_index, threshold=None):
-        threshold = exp.resolve_threshold(threshold)
-        data = exp.data_array[:, :, image_index, :].astype(float)
+def _normalize_style(style: str) -> str:
+    """Return ``"map"`` or ``"curve"`` for any accepted spelling."""
+    try:
+        return _STYLE_ALIASES[style.lower()]
+    except KeyError:
+        raise ValueError(f"Unknown style: {style!r}; use 'map' or 'curve'.") from None
 
-        # Separate data points into those above and below the fluorescence threshold
-        above = np.where(data > threshold, data, np.nan)
-        below = np.where(data < threshold, data, np.nan)
- 
-        fluorescence_above = np.nanmean(above, axis=(1, 2))
-        fluorescence_below = np.nanmean(below, axis=(1, 2))
 
-        err_above = np.nanstd(above, axis=(1, 2))
-        err_below = np.nanstd(below, axis=(1, 2))
+def _axis_label(exp: ExperimentData, axis: int) -> str:
+    """``"device parameter"`` label for scan axis ``axis``."""
+    return " ".join(exp.parameters_labels[axis])
 
-        mask_above = ~np.isnan(fluorescence_above)
-        mask_below = ~np.isnan(fluorescence_below)
 
-        x_above = exp.param_sets_array[mask_above, 0]
-        y_above = fluorescence_above[mask_above]
-        yerr_above = err_above[mask_above]
-        x_below = exp.param_sets_array[mask_below, 0]
-        y_below = fluorescence_below[mask_below]
-        yerr_below = err_below[mask_below]
-        xlabel = exp.parameters_labels[0]
+def _experiment_path(exp: ExperimentData) -> str:
+    """Absolute path of the experiment folder, used in legends and titles."""
+    return str(exp.experiment_folder_path)
 
-        fig = plt.figure(figsize=(14, 4))
-        gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.35, wspace=0.3)
-        fig.suptitle(f"Fluorescence Image #{image_index + 1}")
-        ax_both = fig.add_subplot(gs[:, 0])
-        ax_above = fig.add_subplot(gs[0, 1])
-        ax_below = fig.add_subplot(gs[1, 1], sharex=ax_above)
 
-        err_kw: dict[str, Any] = dict(fmt='o-', capsize=3, elinewidth=1)
+def _as_float(values: Sequence) -> np.ndarray:
+    """Convert a per-entry result (possibly containing ``None``) to floats with NaN."""
+    return np.array([np.nan if v is None else v for v in values], dtype=float)
 
-        # Combined plot (left)
-        ax_both.errorbar(x_above, y_above, yerr=yerr_above, label="above threshold", **err_kw)
-        ax_both.errorbar(x_below, y_below, yerr=yerr_below, label="below threshold", **err_kw)
-        ax_both.axhline(threshold, color='gray', linestyle='--', alpha=0.6, label=f"Threshold = {threshold}")
 
-        ax_both.set_ylabel("Counts")
-        ax_both.set_xlabel(xlabel)
-        ax_both.grid(True, linestyle='--', alpha=0.6)
-        ax_both.legend(loc='best')
+@contextmanager
+def _ignore_empty_slice_warning():
+    """Silence numpy's empty-slice warnings when a parameter set has no such counts."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+        warnings.filterwarnings("ignore", message="Degrees of freedom <= 0", category=RuntimeWarning)
+        yield
 
-        # Above / below (right, stacked)
-        ax_above.errorbar(x_above, y_above, yerr=yerr_above, label=Path(exp.folder_name).name, **err_kw)
-        ax_above.grid(True, linestyle='--', alpha=0.6)
 
-        ax_below.errorbar(
-            x_below, y_below, yerr=yerr_below, label=Path(exp.folder_name).name,
-            color=plt.color_sequences['tab20'][3], markeredgecolor=plt.color_sequences['tab20'][2], **err_kw,
-        )
-        ax_below.set_xlabel(xlabel)
-        ax_below.grid(True, linestyle='--', alpha=0.6)
+def _plot_probability_curve(
+    exp: ExperimentData, values: Sequence, ylabel: str,
+    ax: Optional[Axes], label: Optional[str], plot_kwargs: dict[str, Any],
+) -> Axes:
+    """Shared body of the 1D recapture / loading plots."""
+    if exp.scan_nb_axes < 1:
+        raise ValueError("Expected at least 1 scan axis, got 0.")
+    ax = plt.gca() if ax is None else ax
+    y = _as_float(values)
+    mask = np.isfinite(y)
+    ax.plot(
+        exp.param_sets_array[mask, 0], y[mask],
+        label=_experiment_path(exp) if label is None else label,
+        **plot_kwargs,
+    )
+    ax.set_xlabel(_axis_label(exp, 0))
+    ax.set_ylabel(ylabel)
+    ax.legend()
+    return ax
 
-    def plot_fluo_recapture(self, exp : ExperimentData, threshold=None, threshold_loading=None, threshold_recapture=None):
-        if threshold_loading is None and threshold_recapture is None:
-            threshold_loading = exp.resolve_threshold(threshold)
-            threshold_recapture = threshold_loading
-        elif threshold_loading is None or threshold_recapture is None:
-            raise TypeError("Both or no recapture and loading threshold need to be provided")
-        
-        data_img_0 = exp.data_array[:, :, 0, :]
-        data_img_1 = exp.data_array[:, :, 1, :]
 
-        loaded      = data_img_0 > threshold_loading
-        # recaptured  = np.logical_and(data_img_1 > threshold_recapture, loaded)
-        # empty       = np.where(not loaded, data_img_1, np.nan)
+def _three_panel_plot(
+    fig: Optional[Figure], title: str, x_label: str,
+    first: _Series, second: _Series, errorbar_kwargs: dict[str, Any],
+) -> Tuple[Figure, Axes]:
+    """Both series together on the left, each alone on the right (stacked).
 
-        recap_fluo = np.where(loaded, data_img_1, np.nan)
-        recap_fluo_mean = np.nanmean(recap_fluo, axis=(1, 2))
-        recap_fluo_std  = np.nanstd(recap_fluo, axis=(1, 2))
+    Each right panel reuses the color its series got on the left. Returns
+    the figure and the combined (left) axes.
+    """
+    fig = plt.figure() if fig is None else fig
+    axes = fig.subplot_mosaic([["both", "first"], ["both", "second"]])
+    axes["second"].sharex(axes["first"])
+    fig.suptitle(title)
 
-        background = np.where(~loaded, data_img_1, np.nan)
-        background_mean = np.nanmean(background, axis=(1, 2))
-        background_std  = np.nanstd(background, axis=(1, 2))
+    for key, (x, y, yerr, label) in (("first", first), ("second", second)):
+        combined = axes["both"].errorbar(x, y, yerr=yerr, label=label, **errorbar_kwargs)
+        color = combined.lines[0].get_color()
+        axes[key].errorbar(x, y, yerr=yerr, **{"color": color, **errorbar_kwargs})
 
-        parameters = exp.param_sets_array[:, 0]
+    axes["both"].set_ylabel("Counts")
+    axes["both"].set_xlabel(x_label)
+    axes["second"].set_xlabel(x_label)
+    return fig, axes["both"]
 
-        fig = plt.figure()
-        gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.35, wspace=0.3)
-        fig.suptitle(f"Recapture fluo, {exp.folder_name}")
-        ax_both = fig.add_subplot(gs[:, 0])
-        ax_above = fig.add_subplot(gs[0, 1])
-        ax_below = fig.add_subplot(gs[1, 1], sharex=ax_above)
 
-        err_kw: dict[str, Any] = dict(fmt='o-', capsize=3, elinewidth=1)
+# --------------------------------------------------------------------------- #
+# 1D scans
+# --------------------------------------------------------------------------- #
 
-        # Combined plot (left)
-        ax_both.errorbar(parameters, recap_fluo_mean, yerr=recap_fluo_std, label="Recaptured", **err_kw)
-        ax_both.errorbar(parameters, background_mean, yerr=background_std, label="Background", **err_kw)
-        # ax_both.axhline(threshold_recapture, color='gray', linestyle='--', alpha=0.6, label=f"Threshold recapture = {threshold_recapture}")
+def plot_recapture(
+    exp: ExperimentData, threshold: Optional[int] = None, *,
+    ax: Optional[Axes] = None, label: Optional[str] = None, **plot_kwargs: Any,
+) -> Axes:
+    """Plot average recapture probability vs the first scan axis.
 
-        ax_both.set_ylabel("Counts")
-        ax_both.set_xlabel(exp.parameters_labels[0])
-        ax_both.grid(True, linestyle='--', alpha=0.6)
-        ax_both.legend(loc=(0, -0.6))
+    Points with no loaded atom are skipped. ``label`` defaults to the
+    absolute experiment folder path; ``threshold`` defaults to ``exp.threshold``.
+    ``plot_kwargs`` go to ``Axes.plot``.
+    """
+    return _plot_probability_curve(
+        exp, exp.compute_recapture_average(threshold), "Recapture Probability",
+        ax, label, plot_kwargs,
+    )
 
-        # Above / below (right, stacked)
-        ax_above.errorbar(parameters, recap_fluo_mean, yerr=recap_fluo_std, label=Path(exp.folder_name).name, **err_kw)
-        ax_above.grid(True, linestyle='--', alpha=0.6)
 
-        ax_below.errorbar(
-            parameters, background_mean, yerr=background_std, label=Path(exp.folder_name).name,
-            color=plt.color_sequences['tab20'][3], markeredgecolor=plt.color_sequences['tab20'][2], **err_kw,
-        )
-        ax_below.set_xlabel(exp.parameters_labels[0])
-        ax_below.grid(True, linestyle='--', alpha=0.6)
+def plot_loading(
+    exp: ExperimentData, threshold: Optional[int] = None, *,
+    ax: Optional[Axes] = None, label: Optional[str] = None, **plot_kwargs: Any,
+) -> Axes:
+    """Plot loading probability (first image above threshold) vs the first scan axis.
 
-    def plot_histogram(self, exp : ExperimentData, image_index, threshold=None):
-        pass
+    ``plot_kwargs`` go to ``Axes.plot``.
+    """
+    return _plot_probability_curve(
+        exp, exp.compute_loading_array(threshold), "Loading Probability",
+        ax, label, plot_kwargs,
+    )
 
-    def plot_recapture_per_atom(self, exp : ExperimentData, threshold=None, style="imshow", alpha:float=None):
-        recapture_per_atom = exp.compute_recapture_per_atom(threshold)
 
-        if self.scan_nb_axes > 1:
-            raise ValueError(f"Expected 1 scan axis, got {self.scan_nb_axes}")
+def plot_fluorescence(
+    exp: ExperimentData, image_index: int, threshold: Optional[int] = None, *,
+    fig: Optional[Figure] = None, **errorbar_kwargs: Any,
+) -> Figure:
+    """Plot mean counts above and below threshold in image ``image_index`` (0 or 1).
 
-        style = style.lower()
-        if style == "imshow" or style == "map" or style == "2d":
-            x = exp.param_sets_array[:, 0]
-            dx = np.diff(x).mean() if len(x) > 1 else 1
-            plt.imshow(
-                recapture_per_atom.T,
-                origin="lower",
-                extent=[x[0] - dx / 2, x[-1] + dx / 2, -0.5, exp.atom_number - 0.5],
-                aspect="auto",
-                interpolation="nearest",
-            )
+    Means and standard deviations are taken over all shots and atoms of each
+    parameter set; the threshold is drawn as a horizontal line on the combined
+    panel. ``errorbar_kwargs`` go to every ``Axes.errorbar`` call.
+    """
+    threshold = exp.resolve_threshold(threshold)
+    data = exp.data_array[:, :, image_index, :].astype(float)
+    x = exp.param_sets_array[:, 0]
 
-            plt.xlabel(self.parameters_labels[0])
-            plt.ylabel(f"Atom index")
-            plt.colorbar(label="Recapture Probability")
-            plt.title(Path(self.folder_name).name)
-        
-        elif style == "1d" or style == "plot" or style == "curve":
-            if alpha is None:
-                alpha = np.min((10 / exp.atom_number, 1.0))
+    def series(selected: np.ndarray, label: str) -> _Series:
+        mean = np.nanmean(selected, axis=(1, 2))
+        std = np.nanstd(selected, axis=(1, 2))
+        mask = ~np.isnan(mean)
+        return x[mask], mean[mask], std[mask], label
 
-            for atom in range(exp.atom_number):
-                plt.plot(exp.param_sets_array[:, 0], recapture_per_atom[:, atom], alpha=alpha, color="k")
-            
-            plt.xlabel(self.parameters_labels[0])
-            plt.ylabel(f"Recapture Probability")
-            plt.title(Path(self.folder_name).name)
+    with _ignore_empty_slice_warning():
+        above = series(np.where(data > threshold, data, np.nan), "above threshold")
+        below = series(np.where(data < threshold, data, np.nan), "below threshold")
 
-        return recapture_per_atom
+    fig, ax_both = _three_panel_plot(
+        fig, f"Fluorescence Image #{image_index + 1}", _axis_label(exp, 0),
+        above, below, errorbar_kwargs,
+    )
+    ax_both.axhline(threshold, label=f"Threshold = {threshold}")
+    ax_both.legend()
+    return fig
+
+
+def plot_fluo_recapture(
+    exp: ExperimentData, threshold: Optional[int] = None,
+    threshold_loading: Optional[int] = None, threshold_recapture: Optional[int] = None,
+    *, fig: Optional[Figure] = None, **errorbar_kwargs: Any,
+) -> Figure:
+    """Plot second-image counts, split by whether the site was loaded in the first.
+
+    "Recaptured" is the second-image fluorescence of sites loaded in the
+    first image; "Background" is that of sites that were empty. Pass either
+    ``threshold`` (or nothing, for ``exp.threshold``), or both
+    ``threshold_loading`` and ``threshold_recapture``. ``errorbar_kwargs``
+    go to every ``Axes.errorbar`` call.
+    """
+    if threshold_loading is None and threshold_recapture is None:
+        threshold_loading = exp.resolve_threshold(threshold)
+        threshold_recapture = threshold_loading
+    elif threshold_loading is None or threshold_recapture is None:
+        raise TypeError("Both or no recapture and loading threshold need to be provided")
+
+    loaded = exp.data_array[:, :, 0, :] > threshold_loading
+    second_image = exp.data_array[:, :, 1, :]
+    x = exp.param_sets_array[:, 0]
+
+    def series(selected: np.ndarray, label: str) -> _Series:
+        return x, np.nanmean(selected, axis=(1, 2)), np.nanstd(selected, axis=(1, 2)), label
+
+    with _ignore_empty_slice_warning():
+        recaptured = series(np.where(loaded, second_image, np.nan), "Recaptured")
+        background = series(np.where(~loaded, second_image, np.nan), "Background")
+
+    fig, ax_both = _three_panel_plot(
+        fig, f"Recapture fluo, {_experiment_path(exp)}", _axis_label(exp, 0),
+        recaptured, background, errorbar_kwargs,
+    )
+    ax_both.legend()
+    return fig
+
+
+def plot_recapture_per_atom(
+    exp: ExperimentData, threshold: Optional[int] = None, *,
+    style: str = "map", ax: Optional[Axes] = None, **plot_kwargs: Any,
+) -> Axes:
+    """Plot recapture probability of each atom (ROI) vs the single scan axis.
+
+    ``style="map"`` (or ``"imshow"``, ``"2d"``) draws an atom-index × scan
+    heatmap with a colorbar (``plot_kwargs`` go to ``Axes.pcolormesh``);
+    ``style="curve"`` (or ``"1d"``, ``"plot"``) draws one curve per atom
+    (``plot_kwargs`` go to ``Axes.plot``). Draws on the current axes when
+    ``ax`` is None.
+    """
+    if exp.scan_nb_axes != 1:
+        raise ValueError(f"Expected 1 scan axis, got {exp.scan_nb_axes}")
+    style = _normalize_style(style)
+    recapture_per_atom = exp.compute_recapture_per_atom(threshold)
+    ax = plt.gca() if ax is None else ax
+    order = np.argsort(exp.param_sets_array[:, 0])
+    x = exp.param_sets_array[order, 0]
+    recapture_per_atom = recapture_per_atom[order]
+
+    if style == "map":
+        mesh = ax.pcolormesh(x, np.arange(exp.atom_number), recapture_per_atom.T, **plot_kwargs)
+        ax.figure.colorbar(mesh, ax=ax, label="Recapture Probability")
+        ax.set_ylabel("Atom index")
+    else:
+        ax.plot(x, recapture_per_atom, **plot_kwargs)  # one line per column/atom
+        ax.set_ylabel("Recapture Probability")
+
+    ax.set_xlabel(_axis_label(exp, 0))
+    ax.set_title(_experiment_path(exp))
+    return ax
+
+
+# --------------------------------------------------------------------------- #
+# 2D scans
+# --------------------------------------------------------------------------- #
+
+def plot_recapture_2d(
+    exp: ExperimentData, threshold: Optional[int] = None, *,
+    style: str = "map", x_axis: int = 0, ax: Optional[Axes] = None, **plot_kwargs: Any,
+) -> Axes:
+    """Plot the average recapture of a 2-axis scan.
+
+    ``style="map"`` (or ``"imshow"``, ``"2d"``) draws a heatmap with a colorbar
+    (``plot_kwargs`` go to ``Axes.pcolormesh``); ``style="curve"`` (or ``"1d"``,
+    ``"plot"``) draws one recapture curve per value of the other axis, with
+    gaps at missing points (``plot_kwargs`` go to ``Axes.plot``). ``x_axis``
+    (0 or 1) is the scan axis drawn horizontally. Opens a new figure when
+    ``ax`` is None.
+    """
+    style = _normalize_style(style)
+    x_vals, y_vals, grid = exp.compute_recapture_grid(threshold, x_axis=x_axis)
+    if ax is None:
+        _, ax = plt.subplots()
+    x_label = _axis_label(exp, x_axis)
+    y_label = _axis_label(exp, 1 - x_axis)
+
+    if style == "curve":
+        for y, row in zip(y_vals, grid):
+            ax.plot(x_vals, row, label=f"{y:g}", **plot_kwargs)
+        ax.set_ylabel("Recapture Probability")
+        ax.legend(title=y_label)
+    else:
+        mesh = ax.pcolormesh(x_vals, y_vals, grid, **plot_kwargs)
+        ax.figure.colorbar(mesh, ax=ax, label="Recapture Probability")
+        ax.set_ylabel(y_label)
+
+    ax.set_xlabel(x_label)
+    ax.set_title(_experiment_path(exp))
+    return ax
