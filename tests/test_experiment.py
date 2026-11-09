@@ -217,6 +217,28 @@ class PlotSmokeTests(ExperimentTestCase):
         self.assertIs(plot_loading(self.exp1d, ax=ax, label="loading"), ax)
         self.assertEqual(len(ax.lines), 2)  # overlays on the same axes
 
+    def test_unsorted_scan_is_plotted_in_x_order(self):
+        # Manifest order 0.3, 0.1, 0.2, 0.1 (repeat); each set has a distinct recapture.
+        def recaptured_in(n):
+            return shots(loaded=np.ones((4, 1)), recaptured=(np.arange(4) < n)[:, None])
+
+        exp = self.load("unsorted", [
+            ("AOM+amplitude+0.3", recaptured_in(3)),
+            ("AOM+amplitude+0.1", recaptured_in(1)),
+            ("AOM+amplitude+0.2", recaptured_in(2)),
+            ("AOM+amplitude+0.1", recaptured_in(4)),
+        ], atoms=1)
+        line = plot_recapture(exp).lines[-1]
+        np.testing.assert_array_equal(line.get_xdata(), [0.1, 0.1, 0.2, 0.3])
+        np.testing.assert_array_equal(line.get_ydata(), [0.25, 1.0, 0.5, 0.75])  # repeats keep order
+
+        # Series skip sets with no counts in their category (here "Background" is empty).
+        for fig in (plot_fluorescence(exp, 1), plot_fluo_recapture(exp)):
+            xs = [np.asarray(c.lines[0].get_xdata()) for ax in fig.axes for c in ax.containers]
+            self.assertGreater(sum(len(x) for x in xs), 0)
+            for x in xs:
+                self.assertTrue(np.all(np.diff(x) >= 0), x)
+
     def test_per_atom_and_2d(self):
         _, ax = plt.subplots()
         self.assertIs(plot_recapture_per_atom(self.exp1d, ax=ax), ax)

@@ -85,6 +85,17 @@ def _experiment_path(exp: ExperimentData) -> str:
     return str(exp.experiment_folder_path)
 
 
+def _finite_sorted_by_x(x: np.ndarray, y: np.ndarray, *others: np.ndarray) -> Tuple[np.ndarray, ...]:
+    """Drop points where ``y`` is NaN, then sort everything by ``x``.
+
+    The sort is stable, so repeated ``x`` values keep their manifest order.
+    Returns ``(x, y, *others)``.
+    """
+    mask = np.isfinite(y)
+    order = np.argsort(x[mask], kind="stable")
+    return tuple(array[mask][order] for array in (x, y, *others))
+
+
 @contextmanager
 def _ignore_empty_slice_warning():
     """Silence numpy's empty-slice warnings when a parameter set has no such counts."""
@@ -102,9 +113,9 @@ def _plot_probability_curve(
     if exp.scan_nb_axes < 1:
         raise ValueError("Expected at least 1 scan axis, got 0.")
     ax = plt.gca() if ax is None else ax
-    mask = np.isfinite(y)
+    x, y = _finite_sorted_by_x(exp.param_sets_array[:, 0], y)
     ax.plot(
-        exp.param_sets_array[mask, 0], y[mask],
+        x, y,
         label=_experiment_path(exp) if label is None else label,
         **plot_kwargs,
     )
@@ -190,8 +201,7 @@ def plot_fluorescence(
     def series(selected: np.ndarray, label: str) -> _Series:
         mean = np.nanmean(selected, axis=(1, 2))
         std = np.nanstd(selected, axis=(1, 2))
-        mask = ~np.isnan(mean)
-        return x[mask], mean[mask], std[mask], label
+        return (*_finite_sorted_by_x(x, mean, std), label)
 
     with _ignore_empty_slice_warning():
         above = series(np.where(data > threshold, data, np.nan), "above threshold")
@@ -230,7 +240,9 @@ def plot_fluo_recapture(
     x = exp.param_sets_array[:, 0]
 
     def series(selected: np.ndarray, label: str) -> _Series:
-        return x, np.nanmean(selected, axis=(1, 2)), np.nanstd(selected, axis=(1, 2)), label
+        mean = np.nanmean(selected, axis=(1, 2))
+        std = np.nanstd(selected, axis=(1, 2))
+        return (*_finite_sorted_by_x(x, mean, std), label)
 
     with _ignore_empty_slice_warning():
         recaptured = series(np.where(loaded, second_image, np.nan), "Recaptured")
