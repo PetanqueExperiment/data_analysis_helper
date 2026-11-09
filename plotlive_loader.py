@@ -32,6 +32,25 @@ PARAM_TAG_SEPARATOR = ";"  # separates scan axes in a manifest tag
 DEFAULT_THRESHOLD = 217  # fluorescence counts separating "atom" from "no atom"
 
 
+def _parse_tag(tag: str) -> list[Tuple[str, str, str]]:
+    """Split a manifest tag into one ``(device, parameter, value)`` per scan axis.
+
+    Returns ``[]`` for a tag without scan parameters (no ``+``). The value is
+    everything after the second ``+``, so values such as ``1e+03`` stay whole.
+    """
+    if "+" not in tag:
+        return []
+    axes = []
+    for token in tag.split(PARAM_TAG_SEPARATOR):
+        parts = token.split("+", 2)
+        if len(parts) != 3:
+            raise ValueError(
+                f"Malformed scan token {token!r} in tag {tag!r}; expected device+parameter+value."
+            )
+        axes.append((parts[0], parts[1], parts[2]))
+    return axes
+
+
 class ExperimentData:
     """Load metadata and fluorescence arrays from a single PyCam experiment folder.
 
@@ -41,7 +60,7 @@ class ExperimentData:
     On construction, resolves the folder path, reads the manifest and ROIs,
     and builds two main arrays:
 
-    - ``param_sets_array`` — shape ``(n_entries, n_scan_params)``; string values
+    - ``param_sets_array`` — shape ``(n_entries, n_scan_params)``; float values
       parsed from each manifest ``tag``.
     - ``data_array`` — shape ``(n_entries, *data_shape_per_param_set)``; stacked
       ``.npy`` payloads from ``data/``, NaN-padded for missing shots / files.
@@ -59,17 +78,18 @@ class ExperimentData:
     atom_number : int
         Number of ROI centers in ``rois.json``.
     scan_nb_axes : int
-        Number of semicolon-separated parameters in the first manifest tag.
+        Number of scan axes (``;``-separated tokens in each manifest tag).
     image_nb_per_shot : int
-        Images recorded per shot (signal + background); fixed at 2.
+        Images recorded per shot, read from the data (``data_array.shape[2]``).
     parameters_labels : np.ndarray
         Shape ``(scan_nb_axes, 2)`` — ``(device, parameter)`` for each scan axis.
     total_nb_of_sets_of_params : int
-        Number of manifest entries (= number of loaded ``.npy`` files).
+        Number of manifest entries (= number of ``.npy`` files expected).
     data_shape_per_param_set : tuple
         ``data_array.shape[1:]``, i.e. ``(max_shots, image_nb_per_shot, atom_number)``.
     param_sets_array, data_array : np.ndarray
-        Scan values and fluorescence data; see ``read_data``.
+        Scan values and fluorescence data; see ``read_scan_parameters`` and
+        ``read_data``.
     threshold : int
         Default fluorescence threshold used by the compute and plot methods
         when no ``threshold`` argument is passed to them.
@@ -102,14 +122,14 @@ class ExperimentData:
             folder_name, base_dir=base_dir
         )
         self.manifest = self.read_manifest()
+        self.total_nb_of_sets_of_params = len(self.manifest)
         self.atom_number = self.read_atom_number()
-        self.scan_nb_axes = self.read_scan_nb_axes()
-        self.image_nb_per_shot = 2  # assumes 2 images per shot
-        self.parameters_labels = self.read_parameters_labels()
-        self.total_nb_of_sets_of_params = self.read_total_nb_of_sets_of_params()
-        self.param_sets_array, self.data_array = self.read_data()
+        self.parameters_labels, self.param_sets_array = self.read_scan_parameters()
+        self.scan_nb_axes = len(self.parameters_labels)
+        self.data_array = self.read_data()
         self.data_shape_per_param_set = self.data_array.shape[1:]
-        
+        self.image_nb_per_shot = self.data_array.shape[2]
+
         if print_summary:
             self.summarize_preload()
 
@@ -149,6 +169,8 @@ class ExperimentData:
                 line = line.strip()
                 if line:
                     entries.append(json.loads(line))
+        if not entries:
+            raise ValueError(f"Manifest is empty: {manifest_path}")
         return np.array(entries)
 
     def _resolve_experiment_folder(
@@ -178,39 +200,34 @@ class ExperimentData:
             f"(tried {path.resolve()} and {candidate})"
         )
 
-    def read_scan_nb_axes(self) -> int:
-        """Return how many scan axes appear in a manifest tag (count of ``;``-separated parts)."""
-        entry = self.manifest[0]
-        tag = entry["tag"]
-        if "+" not in tag:
-            return 0
-        tag_parts = (
-            tag.split(PARAM_TAG_SEPARATOR)
-            if PARAM_TAG_SEPARATOR in tag
-            else [tag]
-        )
-        return len(tag_parts)
+    def read_scan_parameters(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Parse every manifest tag into scan-axis labels and values.
 
-    def read_total_nb_of_sets_of_params(self) -> int:
-        """Return the number of manifest lines (= parameter sets / data files)."""
-        return len(self.manifest)
+        Returns
+        -------
+        parameters_labels
+            String array of shape ``(scan_nb_axes, 2)``: ``(device, parameter)``
+            for each scan axis, in tag order.
+        param_sets_array
+            Float array of shape ``(total_nb_of_sets_of_params, scan_nb_axes)``:
+            the scanned value of each axis for each manifest entry.
 
-    def read_parameters_labels(self) -> np.ndarray:
-        """Return ``(device, parameter)`` labels for each scan axis.
-
-        Parsed from the first manifest tag; values (the third ``+``-split field)
-        are discarded here — use ``param_sets_array`` for numeric scan values.
+        Raises ``ValueError`` if an entry does not scan the same
+        ``(device, parameter)`` axes, in the same order, as the first one.
         """
-        entry = self.manifest[0]
-        tag = entry["tag"]
-        if "+" not in tag:
-            return np.empty((0, 2))
-        tag_parts = (
-            tag.split(PARAM_TAG_SEPARATOR)
-            if PARAM_TAG_SEPARATOR in tag
-            else [tag]
-        )
-        return np.array([param_tag.split("+")[:-1] for param_tag in tag_parts])
+        parsed = [_parse_tag(entry["tag"]) for entry in self.manifest]
+        labels = [(device, parameter) for device, parameter, _ in parsed[0]]
+        for idx, axes in enumerate(parsed):
+            entry_labels = [(device, parameter) for device, parameter, _ in axes]
+            if entry_labels != labels:
+                raise ValueError(
+                    f"Manifest entry {idx} scans {entry_labels}, but entry 0 scans {labels}."
+                )
+        parameters_labels = np.array(labels, dtype=str).reshape(len(labels), 2)
+        param_sets_array = np.array(
+            [[float(value) for _, _, value in axes] for axes in parsed], dtype=float,
+        ).reshape(len(parsed), len(labels))
+        return parameters_labels, param_sets_array
 
     def get_scan_values(self, param_index: int) -> np.ndarray:
         """Return sorted unique values scanned along axis ``param_index``.
@@ -222,41 +239,17 @@ class ExperimentData:
         """
         return np.unique(self.param_sets_array[:, param_index])
 
-    def read_data(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Load all manifest entries into parallel parameter and data arrays.
+    def read_data(self) -> np.ndarray:
+        """Load the ``.npy`` file of every manifest entry into one array.
 
-        Iterates over ``self.manifest``, parses each ``tag`` into
-        ``param_sets_array[idx]`` and loads the corresponding ``.npy`` into
-        ``data_array[idx]``.
-
-        Returns
-        -------
-        param_sets_array
-            Shape ``(total_nb_of_sets_of_params, scan_nb_axes)``; values are
-            strings as stored in the manifest tags.
-        data_array
-            Float array of shape ``(total_nb_of_sets_of_params, max_shots,
-            image_nb_per_shot, atom_number)`` where ``max_shots`` is the largest
-            shot count among the files on disk. Entries with fewer shots are
-            padded with NaN; entries whose file is missing are entirely NaN.
+        Returns a float array of shape ``(total_nb_of_sets_of_params,
+        max_shots, image_nb_per_shot, atom_number)`` where ``max_shots`` is the
+        largest shot count among the files on disk. Entries with fewer shots
+        are padded with NaN; entries whose file is missing are entirely NaN.
         """
-        param_sets_array = np.empty((self.total_nb_of_sets_of_params, self.scan_nb_axes))
         data_dir = self.experiment_folder_path / DATA_SUBDIR
         blocks: list[Optional[np.ndarray]] = []
-
-        for idx, entry in enumerate(self.manifest):
-            if self.scan_nb_axes > 0:
-                tag = entry["tag"]
-                tag_parts = (
-                    tag.split(PARAM_TAG_SEPARATOR)
-                    if PARAM_TAG_SEPARATOR in tag
-                    else [tag]
-                )
-
-                for param_idx, param_tag in enumerate(tag_parts):
-                    device, parameter, value = param_tag.split("+")
-                    param_sets_array[idx, param_idx] = value
-
+        for entry in self.manifest:
             data_path = data_dir / entry["data_file"]
             blocks.append(np.load(data_path) if data_path.is_file() else None)
 
@@ -271,7 +264,7 @@ class ExperimentData:
         for idx, block in enumerate(blocks):
             if block is not None:
                 data_array[idx, : block.shape[0]] = block
-        return param_sets_array, data_array
+        return data_array
 
     def valid_shots(self) -> np.ndarray:
         """Boolean mask of shape ``(n_param_sets, max_shots)``; ``False`` for NaN-padded shots."""
