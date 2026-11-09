@@ -108,8 +108,8 @@ class ExperimentData:
         Parameters
         ----------
         folder_name
-            Absolute path, path relative to this module's directory, or a folder
-            name under ``base_dir``.
+            Absolute path, path relative to the current working directory, or a
+            folder name under ``base_dir``.
         base_dir
             If given, ``folder_name`` is resolved as ``base_dir / folder_name``.
         threshold
@@ -179,26 +179,15 @@ class ExperimentData:
         *,
         base_dir: Optional[Union[str, os.PathLike]] = None,
     ) -> Path:
-        """Accept an absolute path, a relative path, or a folder name next to this file."""
-        if base_dir is not None:
-            experiment = Path(base_dir) / folder_name
-            if not experiment.is_dir():
-                raise FileNotFoundError(f"Experiment folder not found: {experiment}")
-            return experiment.resolve()
+        """Return the absolute experiment folder: ``base_dir / folder_name`` or ``folder_name``.
 
-        path = Path(folder_name)
-        if path.is_dir():
-            return path.resolve()
-        here = Path(__file__).resolve().parent
-        candidate = here / path
-        if candidate.is_dir():
-            return candidate.resolve()
-        if path.is_absolute():
-            raise FileNotFoundError(f"Experiment folder not found: {path}")
-        raise FileNotFoundError(
-            f"Experiment folder not found: {folder_name!r} "
-            f"(tried {path.resolve()} and {candidate})"
-        )
+        A relative ``folder_name`` without ``base_dir`` is relative to the
+        current working directory (the notebook's folder in Jupyter).
+        """
+        path = Path(folder_name) if base_dir is None else Path(base_dir) / folder_name
+        if not path.is_dir():
+            raise FileNotFoundError(f"Experiment folder not found: {path.resolve()}")
+        return path.resolve()
 
     def read_scan_parameters(self) -> Tuple[np.ndarray, np.ndarray]:
         """Parse every manifest tag into scan-axis labels and values.
