@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import warnings
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -85,11 +85,6 @@ def _experiment_path(exp: ExperimentData) -> str:
     return str(exp.experiment_folder_path)
 
 
-def _as_float(values: Sequence) -> np.ndarray:
-    """Convert a per-entry result (possibly containing ``None``) to floats with NaN."""
-    return np.array([np.nan if v is None else v for v in values], dtype=float)
-
-
 @contextmanager
 def _ignore_empty_slice_warning():
     """Silence numpy's empty-slice warnings when a parameter set has no such counts."""
@@ -100,14 +95,13 @@ def _ignore_empty_slice_warning():
 
 
 def _plot_probability_curve(
-    exp: ExperimentData, values: Sequence, ylabel: str,
+    exp: ExperimentData, y: np.ndarray, ylabel: str,
     ax: Optional[Axes], label: Optional[str], plot_kwargs: dict[str, Any],
 ) -> Axes:
     """Shared body of the 1D recapture / loading plots."""
     if exp.scan_nb_axes < 1:
         raise ValueError("Expected at least 1 scan axis, got 0.")
     ax = plt.gca() if ax is None else ax
-    y = _as_float(values)
     mask = np.isfinite(y)
     ax.plot(
         exp.param_sets_array[mask, 0], y[mask],

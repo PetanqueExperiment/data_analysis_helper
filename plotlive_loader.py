@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -272,64 +273,53 @@ class ExperimentData:
                 data_array[idx, : block.shape[0]] = block
         return param_sets_array, data_array
 
-    @staticmethod
-    def get_valid_shots(entry_data: np.ndarray) -> np.ndarray:
-        """Return a boolean mask over shots, ``False`` for NaN-padded shots."""
-        return ~np.isnan(entry_data).any(axis=(1, 2))
+    def valid_shots(self) -> np.ndarray:
+        """Boolean mask of shape ``(n_param_sets, max_shots)``; ``False`` for NaN-padded shots."""
+        return ~np.isnan(self.data_array).any(axis=(2, 3))
 
     def resolve_threshold(self, threshold: Optional[int] = None) -> int:
         """Return ``threshold`` if given, otherwise this experiment's ``self.threshold``."""
         return self.threshold if threshold is None else threshold
 
+    def _loaded(self, threshold: int) -> np.ndarray:
+        """``(n_param_sets, max_shots, atom_number)`` mask: site bright in image 1 of a valid shot."""
+        return (self.data_array[:, :, 0, :] > threshold) & self.valid_shots()[:, :, None]
+
     def compute_loading_array(self, threshold: Optional[int] = None) -> np.ndarray:
+        """Loading probability per parameter set, averaged over valid shots and sites.
+
+        Returns a float array of length ``n_param_sets``; NaN where the
+        parameter set has no valid shot.
+        """
         threshold = self.resolve_threshold(threshold)
-        loading_array = np.full(self.total_nb_of_sets_of_params, None, dtype=object)
+        n_samples = self.valid_shots().sum(axis=1) * self.atom_number
+        with np.errstate(invalid="ignore"):
+            return self._loaded(threshold).sum(axis=(1, 2)) / n_samples
 
-        for param_idx in range(self.total_nb_of_sets_of_params):
-            entry_data = self.data_array[param_idx]
-            valid_shots = self.get_valid_shots(entry_data)
-            if not valid_shots.any():
-                continue
+    def compute_recapture_per_atom(self, threshold: Optional[int] = None) -> np.ndarray:
+        """Recapture probability per parameter set and site.
 
-            fluo_1 = entry_data[valid_shots, 0, :]
-
-            loaded = fluo_1 > threshold
-
-            loading_array[param_idx] = loaded.mean()
-
-        return loading_array
+        Fraction of shots loaded in image 1 that are still bright in image 2.
+        Returns a float array of shape ``(n_param_sets, atom_number)``; NaN
+        where the site was never loaded (or the set has no valid shot).
+        """
+        threshold = self.resolve_threshold(threshold)
+        loaded = self._loaded(threshold)
+        recaptured = loaded & (self.data_array[:, :, 1, :] > threshold)
+        with np.errstate(invalid="ignore"):
+            return recaptured.sum(axis=1) / loaded.sum(axis=1)
 
     def compute_recapture_average(self, threshold: Optional[int] = None) -> np.ndarray:
-        threshold = self.resolve_threshold(threshold)
-        recapture_array = np.full(self.total_nb_of_sets_of_params, None, dtype=object)
+        """Recapture probability per parameter set, averaged over sites.
 
-        # Sites never loaded are NaN in the per-atom array and are left out of the average
+        Mean of :meth:`compute_recapture_per_atom` over the sites that were
+        loaded at least once. Returns a float array of length
+        ``n_param_sets``; NaN where no site was loaded.
+        """
         recapture_per_atom = self.compute_recapture_per_atom(threshold)
-        has_loaded_site = ~np.isnan(recapture_per_atom).all(axis=1)
-        recapture_array[has_loaded_site] = np.nanmean(recapture_per_atom[has_loaded_site], axis=1)
-
-        return recapture_array
-    
-    def compute_recapture_per_atom(self, threshold: Optional[int] = None) -> np.ndarray:
-        threshold = self.resolve_threshold(threshold)
-        recapture_per_atom = np.full((self.total_nb_of_sets_of_params, self.atom_number), np.nan)
-
-        for param_idx in range(self.total_nb_of_sets_of_params):
-            entry_data = self.data_array[param_idx]
-            valid_shots = self.get_valid_shots(entry_data)
-            if not valid_shots.any():
-                continue
-            
-            fluo_1 = entry_data[valid_shots, 0, :]
-            fluo_2 = entry_data[valid_shots, 1, :]
-
-            loaded  = fluo_1 > threshold
-            recap   = (fluo_2 > threshold) & loaded
-
-            with np.errstate(invalid="ignore"):
-                recapture_per_atom[param_idx, :] = recap.sum(axis=0) / loaded.sum(axis=0)
-        
-        return recapture_per_atom
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+            return np.nanmean(recapture_per_atom, axis=1)
 
     def compute_recapture_grid(
         self, threshold: Optional[int] = None, *, x_axis: int = 0
@@ -345,15 +335,10 @@ class ExperimentData:
         if x_axis not in (0, 1):
             raise ValueError(f"x_axis must be 0 or 1, got {x_axis!r}")
         y_axis = 1 - x_axis
-        recapture = self.compute_recapture_average(threshold)
         x_vals = self.get_scan_values(x_axis)
         y_vals = self.get_scan_values(y_axis)
+        columns = np.searchsorted(x_vals, self.param_sets_array[:, x_axis])
+        rows = np.searchsorted(y_vals, self.param_sets_array[:, y_axis])
         grid = np.full((len(y_vals), len(x_vals)), np.nan)
-        x_to_i = {v: i for i, v in enumerate(x_vals)}
-        y_to_j = {v: j for j, v in enumerate(y_vals)}
-        for idx, z in enumerate(recapture):
-            if z is None:
-                continue
-            x, y = self.param_sets_array[idx, [x_axis, y_axis]]
-            grid[y_to_j[y], x_to_i[x]] = float(z)
+        grid[rows, columns] = self.compute_recapture_average(threshold)
         return x_vals, y_vals, grid
