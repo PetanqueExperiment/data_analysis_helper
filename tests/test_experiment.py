@@ -155,6 +155,78 @@ class TwoAxisScanTests(ExperimentTestCase):
             self.exp.compute_recapture_grid(x_axis=2)
 
 
+class SubsetTests(ExperimentTestCase):
+    """3-axis scan: A x in (1, 2), B y in (10, 20), C z in (0.5, 1, 2); one file missing."""
+
+    def setUp(self):
+        super().setUp()
+        entries = []
+        for i, (x, y, z) in enumerate((x, y, z) for z in (2, 0.5, 1) for x in (1, 2) for y in (10, 20)):
+            # 1 site, 8 shots, all loaded, a different number recaptured per entry.
+            data = shots(loaded=np.ones((8, 1)), recaptured=(np.arange(8) < i % 9)[:, None])
+            entries.append((f"A+x+{x};B+y+{y};C+z+{z}", None if i == 5 else data))
+        self.exp = self.load("scan3d", entries, atoms=1)
+
+    def test_split_by_axis(self):
+        parent_average = self.exp.compute_recapture_average()
+        parts = self.exp.split_by_axis(2)
+        self.assertEqual(list(parts), [0.5, 1.0, 2.0])
+        for z, sub in parts.items():
+            with self.subTest(z=z):
+                rows = self.exp.param_sets_array[:, 2] == z
+                self.assertEqual(sub.scan_nb_axes, 2)
+                self.assertEqual(sub.total_nb_of_sets_of_params, 4)
+                self.assertEqual(sub.parameters_labels.tolist(), [["A", "x"], ["B", "y"]])
+                np.testing.assert_array_equal(sub.param_sets_array, self.exp.param_sets_array[rows, :2])
+                np.testing.assert_array_equal(sub.data_array, self.exp.data_array[rows])
+                np.testing.assert_array_equal(sub.compute_recapture_average(), parent_average[rows])
+                self.assertEqual(sub.fixed_parameters, [("C", "z", z)])
+                self.assertEqual(sub.label, f"{self.exp.experiment_folder_path} [C z = {z:g}]")
+                _, _, grid = sub.compute_recapture_grid()
+                self.assertEqual(grid.shape, (2, 2))
+        # The missing file (entry 5: z=0.5, x=1, y=20) shows up as NaN in its slice only.
+        self.assertTrue(np.isnan(parts[0.5].compute_recapture_grid()[2][1, 0]))
+
+    def test_original_is_unchanged(self):
+        before = (self.exp.param_sets_array.copy(), self.exp.parameters_labels.copy())
+        self.exp.split_by_axis(0)
+        self.exp.fix_axis(2, 1).fix_axis(0, 2)
+        self.assertEqual(self.exp.scan_nb_axes, 3)
+        self.assertEqual(self.exp.total_nb_of_sets_of_params, 12)
+        self.assertEqual(self.exp.fixed_parameters, [])
+        self.assertEqual(self.exp.label, str(self.exp.experiment_folder_path))
+        np.testing.assert_array_equal(self.exp.param_sets_array, before[0])
+        np.testing.assert_array_equal(self.exp.parameters_labels, before[1])
+
+    def test_chained_fix_axis_gives_1d_scan(self):
+        line = self.exp.fix_axis(2, 1).fix_axis(0, 2)
+        self.assertEqual(line.scan_nb_axes, 1)
+        self.assertEqual(line.parameters_labels.tolist(), [["B", "y"]])
+        np.testing.assert_array_equal(line.param_sets_array[:, 0], [10, 20])
+        self.assertEqual(line.fixed_parameters, [("C", "z", 1.0), ("A", "x", 2.0)])
+        self.assertTrue(line.label.endswith("[C z = 1, A x = 2]"))
+        ax = plot_recapture(line)
+        self.assertEqual(ax.get_legend().get_texts()[0].get_text(), line.label)
+
+    def test_fix_axis_rejects_bad_axis_or_value(self):
+        with self.assertRaisesRegex(ValueError, r"scanned values: \[0.5, 1.0, 2.0\]"):
+            self.exp.fix_axis(2, 3)
+        for axis in (-1, 3):
+            with self.subTest(axis=axis), self.assertRaises(ValueError):
+                self.exp.fix_axis(axis, 1)
+
+    def test_subset_keeps_axes(self):
+        sub = self.exp.subset(self.exp.param_sets_array[:, 0] == 1)
+        self.assertEqual(sub.scan_nb_axes, 3)
+        self.assertEqual(sub.total_nb_of_sets_of_params, 6)
+        self.assertEqual(sub.fixed_parameters, [])
+        np.testing.assert_array_equal(self.exp.subset([3, 0]).param_sets_array,
+                                      self.exp.param_sets_array[[3, 0]])
+        self.assertEqual(self.exp.subset(slice(0, 2)).total_nb_of_sets_of_params, 2)
+        with self.assertRaises(ValueError):
+            self.exp.subset(np.zeros(12, dtype=bool))
+
+
 class TagParsingTests(ExperimentTestCase):
     def test_parse_tag(self):
         self.assertEqual(_parse_tag("AOM+amplitude+0.43"), [("AOM", "amplitude", "0.43")])

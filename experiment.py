@@ -17,11 +17,12 @@ Example: ``"AOM_Tweezers+amplitude+0.43"`` or a multi-axis scan with several
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import warnings
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -93,6 +94,15 @@ class ExperimentData:
     threshold : int
         Default fluorescence threshold used by the compute and plot methods
         when no ``threshold`` argument is passed to them.
+    fixed_parameters : list of (device, parameter, value)
+        Scan axes removed by :meth:`fix_axis` / :meth:`split_by_axis`, with the
+        value kept. Empty for an experiment loaded from its folder.
+    label : str
+        Folder path plus the fixed parameters; used in plot legends and titles.
+
+    Smaller experiments can be derived from a loaded one with :meth:`subset`,
+    :meth:`fix_axis` and :meth:`split_by_axis`, e.g. one 2-axis experiment per
+    value of the third axis of a 3-axis scan.
     """
 
     def __init__(
@@ -129,13 +139,85 @@ class ExperimentData:
         self.data_array = self.read_data()
         self.data_shape_per_param_set = self.data_array.shape[1:]
         self.image_nb_per_shot = self.data_array.shape[2]
+        self.fixed_parameters: list[Tuple[str, str, float]] = []
 
         if print_summary:
             self.summarize_preload()
 
+    @property
+    def label(self) -> str:
+        """Absolute folder path, followed by the fixed parameters if any.
+
+        E.g. ``D:\\...\\my_scan [Wait time = 10]`` for a slice from :meth:`fix_axis`.
+        """
+        if not self.fixed_parameters:
+            return str(self.experiment_folder_path)
+        fixed = ", ".join(f"{device} {parameter} = {value:g}"
+                          for device, parameter, value in self.fixed_parameters)
+        return f"{self.experiment_folder_path} [{fixed}]"
+
+    def subset(self, selection: Union[np.ndarray, Sequence[int], slice]) -> ExperimentData:
+        """Return a new experiment with only the selected parameter sets.
+
+        ``selection`` indexes the parameter sets (rows of ``param_sets_array``):
+        a boolean mask, a list of indices, or a slice. The scan axes are kept.
+        The original experiment is not modified, and nothing is re-read from disk.
+
+        Example: ``exp.subset(exp.param_sets_array[:, 0] < 0.5)``.
+        """
+        indices = np.arange(self.total_nb_of_sets_of_params)[selection]
+        if indices.size == 0:
+            raise ValueError("The selection contains no parameter set.")
+        new = copy.copy(self)
+        new.manifest = self.manifest[indices]
+        new.param_sets_array = self.param_sets_array[indices]
+        new.data_array = self.data_array[indices]
+        new.total_nb_of_sets_of_params = len(indices)
+        new.data_shape_per_param_set = new.data_array.shape[1:]
+        new.fixed_parameters = list(self.fixed_parameters)
+        return new
+
+    def fix_axis(self, axis: int, value: float) -> ExperimentData:
+        """Return the slice of the scan where scan axis ``axis`` equals ``value``.
+
+        The new experiment has one scan axis fewer; the removed axis and its
+        value are appended to ``fixed_parameters`` (and appear in ``label``).
+        ``value`` must be one of ``get_scan_values(axis)``. Calls can be chained
+        to fix several axes.
+        """
+        if not 0 <= axis < self.scan_nb_axes:
+            raise ValueError(f"axis must be in 0..{self.scan_nb_axes - 1}, got {axis!r}")
+        device, parameter = (str(name) for name in self.parameters_labels[axis])
+        mask = self.param_sets_array[:, axis] == value
+        if not mask.any():
+            raise ValueError(
+                f"{device} {parameter} = {value!r} is not in the scan; "
+                f"scanned values: {self.get_scan_values(axis).tolist()}"
+            )
+        new = self.subset(mask)
+        kept = [i for i in range(self.scan_nb_axes) if i != axis]
+        new.param_sets_array = new.param_sets_array[:, kept]
+        new.parameters_labels = self.parameters_labels[kept]
+        new.scan_nb_axes = self.scan_nb_axes - 1
+        new.fixed_parameters.append((device, parameter, float(value)))
+        return new
+
+    def split_by_axis(self, axis: int) -> Dict[float, ExperimentData]:
+        """Split the scan into one experiment per value of scan axis ``axis``.
+
+        Returns ``{value: fix_axis(axis, value)}`` in increasing value order.
+        E.g. a 3-axis scan with 5 values on axis 2 gives 5 two-axis experiments::
+
+            for value, sub in exp.split_by_axis(2).items():
+                plot_recapture_2d(sub)
+        """
+        return {float(value): self.fix_axis(axis, value) for value in self.get_scan_values(axis)}
+
     def summarize_preload(self) -> None:
         """Print a concise summary of the loaded experiment metadata and arrays."""
         print(f"Experiment folder: {self.experiment_folder_path}")
+        for device, parameter, value in self.fixed_parameters:
+            print(f"Fixed: {device} {parameter} = {value:g}")
         print(f"Atom number (ROI centers): {self.atom_number}")
         print(f"Scan axes: {self.scan_nb_axes}")
         print(f"Parameter labels: {self.parameters_labels.tolist()}")

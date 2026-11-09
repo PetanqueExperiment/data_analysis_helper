@@ -82,6 +82,30 @@ ok = np.isfinite(y)
 popt, pcov = curve_fit(model, exp.param_sets_array[ok, 0], y[ok])
 ```
 
+### Slicing a scan
+
+Derive smaller experiments from a loaded one, without re-reading the disk.
+The original is left unchanged.
+
+| Method | Returns |
+| --- | --- |
+| `split_by_axis(axis)` | `{value: ExperimentData}`, one experiment per value of `axis`, with that axis removed |
+| `fix_axis(axis, value)` | The slice where `axis == value`, with that axis removed; chainable |
+| `subset(selection)` | Only the parameter sets in a boolean mask, index list or slice; all axes kept |
+
+```python
+# 3-axis scan, 5 values on axis 2 -> five 2-axis experiments
+for value, sub in exp.split_by_axis(2).items():
+    plot_recapture_2d(sub)
+
+line = exp.fix_axis(2, 10.0).fix_axis(0, 0.3)       # down to a 1D scan
+early = exp.subset(exp.param_sets_array[:, 0] < 5)  # arbitrary selection
+```
+
+Removed axes are recorded in `fixed_parameters`, and `exp.label` (used in
+plot legends and titles) appends them to the folder path, e.g.
+`D:\...\my_scan [Wait time = 10]`.
+
 ## Plotting
 
 | Function | Plot |

@@ -80,11 +80,6 @@ def _axis_label(exp: ExperimentData, axis: int) -> str:
     return " ".join(exp.parameters_labels[axis])
 
 
-def _experiment_path(exp: ExperimentData) -> str:
-    """Absolute path of the experiment folder, used in legends and titles."""
-    return str(exp.experiment_folder_path)
-
-
 def _finite_sorted_by_x(x: np.ndarray, y: np.ndarray, *others: np.ndarray) -> Tuple[np.ndarray, ...]:
     """Drop points where ``y`` is NaN, then sort everything by ``x``.
 
@@ -116,7 +111,7 @@ def _plot_probability_curve(
     x, y = _finite_sorted_by_x(exp.param_sets_array[:, 0], y)
     ax.plot(
         x, y,
-        label=_experiment_path(exp) if label is None else label,
+        label=exp.label if label is None else label,
         **plot_kwargs,
     )
     ax.set_xlabel(_axis_label(exp, 0))
@@ -160,9 +155,9 @@ def plot_recapture(
 ) -> Axes:
     """Plot average recapture probability vs the first scan axis.
 
-    Points with no loaded atom are skipped. ``label`` defaults to the
-    absolute experiment folder path; ``threshold`` defaults to ``exp.threshold``.
-    ``plot_kwargs`` go to ``Axes.plot``.
+    Points with no loaded atom are skipped. ``label`` defaults to
+    ``exp.label`` (folder path and fixed parameters); ``threshold`` defaults
+    to ``exp.threshold``. ``plot_kwargs`` go to ``Axes.plot``.
     """
     return _plot_probability_curve(
         exp, exp.compute_recapture_average(threshold), "Recapture Probability",
@@ -249,7 +244,7 @@ def plot_fluo_recapture(
         background = series(np.where(~loaded, second_image, np.nan), "Background")
 
     fig, ax_both = _three_panel_plot(
-        fig, f"Recapture fluo, {_experiment_path(exp)}", _axis_label(exp, 0),
+        fig, f"Recapture fluo, {exp.label}", _axis_label(exp, 0),
         recaptured, background, errorbar_kwargs,
     )
     ax_both.legend()
@@ -286,7 +281,7 @@ def plot_recapture_per_atom(
         ax.set_ylabel("Recapture Probability")
 
     ax.set_xlabel(_axis_label(exp, 0))
-    ax.set_title(_experiment_path(exp))
+    ax.set_title(exp.label)
     return ax
 
 
@@ -325,5 +320,5 @@ def plot_recapture_2d(
         ax.set_ylabel(y_label)
 
     ax.set_xlabel(x_label)
-    ax.set_title(_experiment_path(exp))
+    ax.set_title(exp.label)
     return ax
