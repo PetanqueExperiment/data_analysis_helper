@@ -71,6 +71,7 @@ folder). `print_summary=False` silences the summary.
 | `compute_recapture_grid(x_axis=0)` | `(x_vals, y_vals, grid)` of the average recapture for a 2-axis scan |
 | `get_scan_values(axis)` | Sorted unique values of one scan axis |
 | `valid_shots()` | Boolean mask `(param_sets, shots)`, `False` for padded shots |
+| `read_static_settings()` | `{device label: {setting: value}}` set for the whole scan, from `sequence.json` (e.g. SLM grating) |
 
 All `compute_*` methods take an optional `threshold` (default `exp.threshold`)
 and return float arrays with **NaN where there is no value** (nothing loaded,
@@ -241,9 +242,12 @@ A separate subpackage, not re-exported by `from data_analysis_helper import *`:
 ```python
 from data_analysis_helper import arena as als
 
-result = als.analyze_arena_ramsey(exp, condition={"Arena AOM amplitude": 0.05},
-                                  grating=(41.38, 51.18))  # fits, beam, step, one figure
+result = als.analyze_arena_ramsey(exp, condition={"Arena AOM amplitude": 0.05})  # fits, beam, step, one figure
 ```
+
+The SLM grating used for the scan is read from the folder's `sequence.json`
+(`exp.read_static_settings()["SLM_Controller"]`) to print the next grating;
+pass `grating=(x, y)` only to override it.
 
 From a Ramsey scan of the arena sites (the last `n_arena` ROIs) and the
 reservoir (all other ROIs): Ramsey fit of each site, light shift

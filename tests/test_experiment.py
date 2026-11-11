@@ -155,6 +155,26 @@ class TwoAxisScanTests(ExperimentTestCase):
             self.exp.compute_recapture_grid(x_axis=2)
 
 
+class StaticSettingsTests(ExperimentTestCase):
+    """``read_static_settings`` reads ``document/static`` of ``sequence.json``."""
+
+    def setUp(self):
+        super().setUp()
+        self.exp = self.load("scan", [("A+x+1", shots([[1]], [[1]]))], atoms=1)
+
+    def test_settings_by_device_label(self):
+        static = {"rows": 2, "labels": ["hero_HWP", "SLM_Controller"], "software": ["waveplate", "slm"],
+                  "values": {"0": {"angle": 76.5}, "1": {"grating_x": 41.52, "grating_y": 51.58}}}
+        (self.exp.experiment_folder_path / "sequence.json").write_text(
+            json.dumps({"format": "sequencer_gui_sequence", "document": {"static": static}}))
+        self.assertEqual(self.exp.read_static_settings(),
+                         {"hero_HWP": {"angle": 76.5}, "SLM_Controller": {"grating_x": 41.52, "grating_y": 51.58}})
+
+    def test_missing_sequence_file(self):
+        with self.assertRaises(FileNotFoundError):
+            self.exp.read_static_settings()
+
+
 class SubsetTests(ExperimentTestCase):
     """3-axis scan: A x in (1, 2), B y in (10, 20), C z in (0.5, 1, 2); one file missing."""
 

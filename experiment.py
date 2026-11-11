@@ -6,6 +6,8 @@ An experiment folder is expected to contain:
   parameters) and a ``data_file`` path under ``data/``.
 - ``rois.json`` — ROI centers (one per trapped atom / tweezers site).
 - ``data/`` — ``.npy`` arrays referenced by the manifest.
+- ``sequence.json`` (optional) — the sequencer document; its static device
+  settings (SLM grating, waveplate angles, ...) are read by ``read_static_settings``.
 
 Manifest tags encode scanned parameters as semicolon-separated tokens::
 
@@ -29,6 +31,7 @@ import numpy as np
 DATA_SUBDIR = "data"  # subdirectory holding .npy files
 MANIFEST_NAME = "manifest.jsonl"
 ROIS_NAME = "rois.json"
+SEQUENCE_NAME = "sequence.json"
 PARAM_TAG_SEPARATOR = ";"  # separates scan axes in a manifest tag
 DEFAULT_THRESHOLD = 217  # fluorescence counts separating "atom" from "no atom"
 
@@ -254,6 +257,18 @@ class ExperimentData:
         if not entries:
             raise ValueError(f"Manifest is empty: {manifest_path}")
         return np.array(entries)
+
+    def read_static_settings(self) -> Dict[str, dict]:
+        """Static device settings of the scan, from ``sequence.json``.
+
+        The sequencer stores the values set once for the whole scan under
+        ``document/static``. Returns ``{device label: {setting: value}}``, e.g.
+        ``{"SLM_Controller": {"grating_x": 41.52, "grating_y": 51.58, ...}}``.
+        Raises ``FileNotFoundError`` if the folder has no ``sequence.json``.
+        """
+        with open(self.experiment_folder_path / SEQUENCE_NAME, encoding="utf-8") as f:
+            static = json.load(f)["document"]["static"]
+        return {label: static["values"].get(str(row), {}) for row, label in enumerate(static["labels"])}
 
     def _resolve_experiment_folder(
         self,

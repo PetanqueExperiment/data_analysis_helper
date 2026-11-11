@@ -11,6 +11,7 @@
 ``analyze_arena_ramsey`` does both.
 """
 
+import warnings
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
@@ -19,6 +20,17 @@ import numpy as np
 from .beam import TRAP_FILE, BeamFit, center_site, fit_beam_center, grating_step, ring_inhomogeneity, trap_file_positions
 from .plots import plot_arena_fits_overlay, plot_beam_map, plot_shift_vs_distance
 from .ramsey import ArenaFits, fit_arena_scans
+
+SLM_LABEL = "SLM_Controller"  # device label of the SLM in the sequencer's static settings
+
+
+def scan_grating_um(exp):
+    """SLM grating (x, y) in um set during the scan, from its ``sequence.json``; None if not recorded."""
+    try:
+        slm = exp.read_static_settings()[SLM_LABEL]
+        return np.array([slm["grating_x"], slm["grating_y"]], dtype=float)
+    except (FileNotFoundError, KeyError):
+        return None
 
 
 @dataclass
@@ -44,7 +56,9 @@ def compute_arena_ramsey(exp, *, condition=None, grating=None, n_arena=7, min_fi
         exp: ``ExperimentData`` scanning only the microwave frequency (MHz).
         condition: Settings that were not scanned, for titles, e.g.
             ``{"Arena AOM amplitude": 0.05}``.
-        grating: Current SLM grating (x, y) in um, to compute the next one.
+        grating: SLM grating (x, y) in um used for the scan, to compute the
+            next one. Default: read from the scan's ``sequence.json``. A given
+            grating that differs from the recorded one is used, with a warning.
         n_arena: The last ``n_arena`` ROIs (and traps of ``trap_file``) are the arena sites.
         min_fit_amplitude: See ``fit_arena_scans``.
         trap_file: Calibrated SLM trap file; its last ``n_arena`` positions (um)
@@ -66,7 +80,15 @@ def compute_arena_ramsey(exp, *, condition=None, grating=None, n_arena=7, min_fi
 
     beam = fit_beam_center(fits, site_xy_um)
     step, step_err = grating_step(beam)
-    grating = None if grating is None else np.asarray(grating, dtype=float)
+    recorded = scan_grating_um(exp)
+    if grating is None:
+        grating = recorded
+    else:
+        grating = np.asarray(grating, dtype=float)
+        if recorded is not None and not np.allclose(grating, recorded):
+            warnings.warn(f"Given grating ({grating[0]:.2f}, {grating[1]:.2f}) um differs from the one "
+                          f"recorded in sequence.json ({recorded[0]:.2f}, {recorded[1]:.2f}) um; "
+                          "using the given one.")
     next_grating = None if grating is None else grating + step
     return ArenaRamseyAnalysis(fits, beam, ring, ring_mean, inhomogeneity, n_ring_used,
                                step, step_err, grating, next_grating)
@@ -95,7 +117,8 @@ def report_arena_ramsey(result, *, site_styles=None, figsize=(16, 13), show=True
     map_fig.suptitle("+ arena center, ★ beam center, dashed circle = w\n"
                      "arrow = move from beam center to arena center", fontsize="medium")
     ax = plot_shift_vs_distance(beam, ax=dist_fig.subplots())
-    ax.legend(loc="upper right")
+    if beam.condition_name:  # the only legend entry
+        ax.legend(loc="upper right")
     if show:
         plt.show()
 

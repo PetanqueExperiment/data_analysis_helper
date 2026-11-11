@@ -11,7 +11,7 @@ Typical use::
 
     from data_analysis_helper import arena as als
 
-    result = als.analyze_arena_ramsey(exp, grating=(41.38, 51.18))  # all steps, one figure
+    result = als.analyze_arena_ramsey(exp)  # all steps, one figure; grating from sequence.json
 
     # or step by step, for every condition of a scan
     for fits in als.fit_arena_scans(exp, n_arena=7):
@@ -21,7 +21,8 @@ Typical use::
         als.plot_beam_map(beam)
 """
 
-from .analysis import ArenaRamseyAnalysis, analyze_arena_ramsey, compute_arena_ramsey, report_arena_ramsey
+from .analysis import (ArenaRamseyAnalysis, analyze_arena_ramsey, compute_arena_ramsey, report_arena_ramsey,
+                       scan_grating_um)
 from .beam import (TRAP_FILE, BeamFit, center_site, fit_beam_center, gaussian_beam_kHz, grating_step,
                    min_site_spacing, ring_inhomogeneity, trap_file_positions)
 from .plots import (default_styles, plot_arena_fits, plot_arena_fits_overlay, plot_beam_map,
