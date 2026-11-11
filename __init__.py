@@ -12,6 +12,9 @@ models
     Fit models (``rabi_osc``, ``ramsey_spectro``) for ``curve_fit``.
 release_recapture
     Release–recapture simulation and temperature fit.
+arena
+    Subpackage: arena light-shift analysis (Ramsey fits, beam center, SLM
+    grating step). Not re-exported; ``from data_analysis_helper import arena``.
 
 The main names are re-exported here::
 

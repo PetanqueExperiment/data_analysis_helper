@@ -1,37 +1,29 @@
-"""Arena light-shift analysis from a Ramsey scan of arena vs reservoir sites.
+"""Arena light-shift analysis from Ramsey scans of arena vs reservoir sites.
 
-The last ``n_arena`` ROIs are the arena sites (a ring of 6 plus its center);
-all other ROIs form the reservoir, which sees no arena light and gives the
-reference resonance.
+Read the files in the order of the analysis:
 
-The scan has one microwave frequency axis and any number of other axes
-(arena amplitude, grating, repetition, ...). Each combination of the other
-axes is a *condition*, stored as a dict ``{"device parameter": value}``.
+``ramsey.py``    recapture of each site -> Ramsey fit -> light shift (kHz)
+``beam.py``      light shifts of the arena sites -> Gaussian beam center -> SLM grating step (um)
+``analysis.py``  the whole chain for one scan, and its printed / plotted report
+``plots.py``     the figures (check them by eye)
 
 Typical use::
 
     from data_analysis_helper import arena as als
 
-    fits = als.fit_arena_scans(exp, n_arena=7)          # Ramsey fit of every site
-    als.plot_arena_fits_overlay(fits, 0)                # data + fits of condition 0
-    beam = als.fit_beam_center(fits, als.arena_positions(exp))
-    print(beam.summary())
-    als.plot_beam_map(beam)
+    result = als.analyze_arena_ramsey(exp, grating=(41.38, 51.18))  # all steps, one figure
 
-Or everything at once (fits, inhomogeneity, beam, next grating, one figure)::
-
-    result = als.analyze_arena_ramsey(exp, grating=(41.38, 51.18))  # positions from TRAP_FILE
-
-Units: frequency MHz, Ramsey time T μs, light shifts kHz. Positions are
-those given to ``fit_beam_center``: SLM trap-file positions in um
-(``trap_file_positions``, the default of ``analyze_arena_ramsey``) or camera
-ROI pixels (``arena_positions``). Colors come from the rcParams cycle unless ``site_styles`` /
-``condition_styles`` (lists of ``Axes.plot`` keyword dicts) are given.
+    # or step by step, for every condition of a scan
+    for fits in als.fit_arena_scans(exp, n_arena=7):
+        als.plot_arena_fits_overlay(fits)
+        beam = als.fit_beam_center(fits, als.trap_file_positions(als.TRAP_FILE))
+        print(beam.summary())
+        als.plot_beam_map(beam)
 """
 
-from .analysis import ArenaRamseyAnalysis, analyze_arena_ramsey
-from .beam import (TRAP_FILE, BeamFit, arena_positions, center_site, fit_beam_center, grating_step,
-                   ring_inhomogeneity, trap_file_positions)
+from .analysis import ArenaRamseyAnalysis, analyze_arena_ramsey, compute_arena_ramsey, report_arena_ramsey
+from .beam import (TRAP_FILE, BeamFit, center_site, fit_beam_center, gaussian_beam_kHz, grating_step,
+                   min_site_spacing, ring_inhomogeneity, trap_file_positions)
 from .plots import (default_styles, plot_arena_fits, plot_arena_fits_overlay, plot_beam_map,
-                    plot_resonance_vs_condition, plot_shift_vs_distance, plot_site_curves)
-from .ramsey import RESERVOIR, ArenaFits, fit_arena_scans, fit_ramsey, ramsey_no_phase, site_curves, site_names, split_conditions
+                    plot_resonance_vs_condition, plot_shift_vs_distance)
+from .ramsey import RESERVOIR, ArenaFits, RamseyFit, fit_arena_scans, fit_ramsey, ramsey_no_phase

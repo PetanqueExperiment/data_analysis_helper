@@ -234,6 +234,28 @@ approximation requires `k*T << h*depth_MHz*1e6`. `zero_point=True` includes
 zero-point widths, with an approximate classical capture test near zero
 temperature.
 
+## Arena light-shift analysis (`arena/`)
+
+A separate subpackage, not re-exported by `from data_analysis_helper import *`:
+
+```python
+from data_analysis_helper import arena as als
+
+result = als.analyze_arena_ramsey(exp, condition={"Arena AOM amplitude": 0.05},
+                                  grating=(41.38, 51.18))  # fits, beam, step, one figure
+```
+
+From a Ramsey scan of the arena sites (the last `n_arena` ROIs) and the
+reservoir (all other ROIs): Ramsey fit of each site, light shift
+`f0(site) - f0(reservoir)` in kHz, Gaussian fit of the arena beam center on the
+SLM trap-file positions (μm), and the SLM grating step that brings the arena
+onto the beam. The files follow the analysis: `ramsey.py`, `beam.py`,
+`analysis.py`, then `plots.py`; see `arena/__init__.py`.
+
+`analyze_arena_ramsey` takes a frequency-only scan. For scans with other axes,
+`fit_arena_scans` returns one `ArenaFits` per condition; fit the beam of each
+with `fit_beam_center`.
+
 ## Development
 
 Keep calculations independent of notebook globals, document input/output

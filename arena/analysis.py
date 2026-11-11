@@ -1,4 +1,15 @@
-"""Whole arena Ramsey analysis of one scan (moved from arena_light_shift.py)."""
+"""Step 3: the whole arena Ramsey analysis of one frequency-only scan.
+
+``compute_arena_ramsey`` does the calculation (no printing, no plotting):
+
+1. Ramsey fit of the reservoir average and of each arena site -> light shifts.
+2. Ring inhomogeneity: std / |mean| of the light shift of the 6 ring sites.
+3. Gaussian fit of the beam center on the trap-file positions (um).
+4. SLM grating step towards the beam center, and the next grating.
+
+``report_arena_ramsey`` prints the numbers and draws one figure;
+``analyze_arena_ramsey`` does both.
+"""
 
 from dataclasses import dataclass
 
@@ -14,63 +25,101 @@ from .ramsey import ArenaFits, fit_arena_scans
 class ArenaRamseyAnalysis:
     fits: ArenaFits
     beam: BeamFit
-    ring_sites: list
-    inhomogeneity: np.ndarray   # std / |mean| of the ring shifts, per condition
-    step: np.ndarray            # grating move (um)
-    step_err: np.ndarray
-    next_grating: np.ndarray    # None if the current grating is not given
-    fig: plt.Figure
+    ring_sites: list              # indices of the ring sites among the arena sites
+    ring_mean_shift_kHz: float
+    inhomogeneity: float          # std / |mean| of the reliable ring shifts
+    n_ring_used: int              # number of reliable ring shifts
+    step_um: np.ndarray           # grating move (x, y)
+    step_err_um: np.ndarray
+    grating_um: np.ndarray        # current grating, None if not given
+    next_grating_um: np.ndarray   # grating + step, None if the grating is not given
+    fig: plt.Figure = None        # set by analyze_arena_ramsey
 
 
-def analyze_arena_ramsey(exp, *, condition=None, grating=None, n_arena=7, min_fit_amplitude=0.15,
-                         site_styles=None, trap_file=TRAP_FILE, figsize=(16, 13), show=True, verbose=True):
-    """Full arena Ramsey analysis of one condition, in one call.
+def compute_arena_ramsey(exp, *, condition=None, grating=None, n_arena=7, min_fit_amplitude=0.15,
+                         trap_file=TRAP_FILE):
+    """Fits, ring inhomogeneity, beam center and grating step of one frequency-only scan.
 
-    1. Ramsey fit of the reservoir average and of each arena site (fit table printed).
-    2. Ring inhomogeneity: std / |mean| of the light shift of the 6 ring sites (printed).
-    3. Gaussian fit of the beam center, and the SLM grating step towards it.
-    4. One figure: all site curves together (top), beam map and shift vs distance (bottom).
-    5. After the figure: beam fit summary, step, and the next grating if ``grating`` is given.
+    Args:
+        exp: ``ExperimentData`` scanning only the microwave frequency (MHz).
+        condition: Settings that were not scanned, for titles, e.g.
+            ``{"Arena AOM amplitude": 0.05}``.
+        grating: Current SLM grating (x, y) in um, to compute the next one.
+        n_arena: The last ``n_arena`` ROIs (and traps of ``trap_file``) are the arena sites.
+        min_fit_amplitude: See ``fit_arena_scans``.
+        trap_file: Calibrated SLM trap file; its last ``n_arena`` positions (um)
+            are the arena sites for the beam fit.
 
-    ``grating``: current SLM grating (x, y) in um. ``trap_file``: calibrated SLM trap
-    file; its last ``n_arena`` positions (um) are the arena sites for the beam fit.
-    Returns an ``ArenaRamseyAnalysis``.
+    Returns:
+        An ``ArenaRamseyAnalysis`` (without figure).
     """
-    fits = fit_arena_scans(exp, n_arena=n_arena, condition=condition,
-                           min_fit_amplitude=min_fit_amplitude, verbose=verbose)
-    site_xy = trap_file_positions(trap_file, n_arena)
-    center = center_site(site_xy)
-    ring = [i for i in range(n_arena) if i != center]
-    mean, inhomogeneity, n_used = ring_inhomogeneity(fits, ring)
-    print()
-    for name, value, m, n in zip(fits.condition_names, inhomogeneity, mean, n_used):
-        print(f"{name}: mean shift = {m:.3f} kHz, std/mean over {n} ring atoms = {value * 100:.1f} %")
+    fits_per_condition = fit_arena_scans(exp, n_arena=n_arena, condition=condition,
+                                         min_fit_amplitude=min_fit_amplitude, verbose=False)
+    if len(fits_per_condition) != 1:
+        raise ValueError(f"The scan has {len(fits_per_condition)} conditions; this analysis takes a "
+                         "frequency-only scan. Use fit_arena_scans and fit_beam_center per condition.")
+    fits = fits_per_condition[0]
 
-    beam = fit_beam_center(fits, site_xy, unit="um")
+    site_xy_um = trap_file_positions(trap_file, n_arena)
+    ring = [i for i in range(n_arena) if i != center_site(site_xy_um)]
+    ring_mean, inhomogeneity, n_ring_used = ring_inhomogeneity(fits, ring)
+
+    beam = fit_beam_center(fits, site_xy_um)
     step, step_err = grating_step(beam)
-    next_grating = None if grating is None else np.asarray(grating, dtype=float) + step
+    grating = None if grating is None else np.asarray(grating, dtype=float)
+    next_grating = None if grating is None else grating + step
+    return ArenaRamseyAnalysis(fits, beam, ring, ring_mean, inhomogeneity, n_ring_used,
+                               step, step_err, grating, next_grating)
+
+
+def report_arena_ramsey(result, *, site_styles=None, figsize=(16, 13), show=True, verbose=True):
+    """Print the fit table and ring inhomogeneity, draw one figure, then print the beam fit and step.
+
+    Figure: all site curves with their fits (top), beam map and shift vs
+    distance (bottom). Returns the figure.
+    """
+    fits, beam = result.fits, result.beam
+    if verbose:
+        print(fits.summary())
+        print(f"\n{fits.condition_name}: mean shift = {result.ring_mean_shift_kHz:.3f} kHz, "
+              f"std/mean over {result.n_ring_used} ring atoms = {result.inhomogeneity * 100:.1f} %")
 
     fig = plt.figure(figsize=figsize, layout="constrained")
     top, bottom = fig.subfigures(2, 1, height_ratios=[1, 1.1])
     map_fig, dist_fig = bottom.subfigures(1, 2, width_ratios=[1.2, 1])
-    ax = plot_arena_fits_overlay(fits, 0, ax=top.subplots(), site_styles=site_styles)
+    ax = plot_arena_fits_overlay(fits, ax=top.subplots(), site_styles=site_styles)
     ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
-    plot_beam_map(beam, fig=map_fig)
+    ax = plot_beam_map(beam, ax=map_fig.subplots())
+    ax.grid(False)
+    ax.minorticks_off()
     map_fig.suptitle("+ arena center, ★ beam center, dashed circle = w\n"
                      "arrow = move from beam center to arena center", fontsize="medium")
-    for ax in map_fig.axes[:len(beam.conditions)]:  # site panels (colorbars come after)
-        ax.grid(False)
-        ax.minorticks_off()
     ax = plot_shift_vs_distance(beam, ax=dist_fig.subplots())
     ax.legend(loc="upper right")
     if show:
         plt.show()
 
-    print()
-    print(beam.summary())
-    print(f"\nStep                   = ({step[0]:+.2f} ± {step_err[0]:.2f}, {step[1]:+.2f} ± {step_err[1]:.2f}) um"
-          f"  (|step| = {np.linalg.norm(step):.2f} um)")
-    if next_grating is not None:
-        print(f"Current grating (x, y) = ({grating[0]:.2f}, {grating[1]:.2f}) um")
-        print(f"Next grating to try    = ({next_grating[0]:.2f}, {next_grating[1]:.2f}) um")
-    return ArenaRamseyAnalysis(fits, beam, ring, inhomogeneity, step, step_err, next_grating, fig)
+    if verbose:
+        step, err = result.step_um, result.step_err_um
+        print()
+        print(beam.summary())
+        print(f"\nStep                   = ({step[0]:+.2f} ± {err[0]:.2f}, {step[1]:+.2f} ± {err[1]:.2f}) um"
+              f"  (|step| = {np.linalg.norm(step):.2f} um)")
+        if result.grating_um is not None:
+            (gx, gy), (nx, ny) = result.grating_um, result.next_grating_um
+            print(f"Current grating (x, y) = ({gx:.2f}, {gy:.2f}) um")
+            print(f"Next grating to try    = ({nx:.2f}, {ny:.2f}) um")
+    return fig
+
+
+def analyze_arena_ramsey(exp, *, condition=None, grating=None, n_arena=7, min_fit_amplitude=0.15,
+                         site_styles=None, trap_file=TRAP_FILE, figsize=(16, 13), show=True, verbose=True):
+    """``compute_arena_ramsey`` then ``report_arena_ramsey``, in one call.
+
+    Returns the ``ArenaRamseyAnalysis``, with its figure in ``.fig``.
+    """
+    result = compute_arena_ramsey(exp, condition=condition, grating=grating, n_arena=n_arena,
+                                  min_fit_amplitude=min_fit_amplitude, trap_file=trap_file)
+    result.fig = report_arena_ramsey(result, site_styles=site_styles, figsize=figsize, show=show,
+                                     verbose=verbose)
+    return result
