@@ -101,19 +101,24 @@ def _ignore_empty_slice_warning():
 
 
 def _plot_probability_curve(
-    exp: ExperimentData, y: np.ndarray, ylabel: str,
+    exp: ExperimentData, y: np.ndarray, yerr: Optional[np.ndarray], ylabel: str,
     ax: Optional[Axes], label: Optional[str], plot_kwargs: dict[str, Any],
 ) -> Axes:
-    """Shared body of the 1D recapture / loading plots."""
+    """Shared body of the 1D recapture / loading plots.
+
+    ``yerr`` is the 1 sigma error of ``y`` (same shape), drawn with
+    ``Axes.errorbar``; with ``yerr=None`` the curve is drawn with ``Axes.plot``.
+    """
     if exp.scan_nb_axes < 1:
         raise ValueError("Expected at least 1 scan axis, got 0.")
     ax = plt.gca() if ax is None else ax
-    x, y = _finite_sorted_by_x(exp.param_sets_array[:, 0], y)
-    ax.plot(
-        x, y,
-        label=exp.label if label is None else label,
-        **plot_kwargs,
-    )
+    label = exp.label if label is None else label
+    if yerr is None:
+        x, y = _finite_sorted_by_x(exp.param_sets_array[:, 0], y)
+        ax.plot(x, y, label=label, **plot_kwargs)
+    else:
+        x, y, yerr = _finite_sorted_by_x(exp.param_sets_array[:, 0], y, yerr)
+        ax.errorbar(x, y, yerr=yerr, label=label, **plot_kwargs)
     ax.set_xlabel(_axis_label(exp, 0))
     ax.set_ylabel(ylabel)
     ax.legend()
@@ -151,30 +156,42 @@ def _three_panel_plot(
 
 def plot_recapture(
     exp: ExperimentData, threshold: Optional[int] = None, *,
-    ax: Optional[Axes] = None, label: Optional[str] = None, **plot_kwargs: Any,
+    ax: Optional[Axes] = None, label: Optional[str] = None, errorbars: bool = True,
+    **plot_kwargs: Any,
 ) -> Axes:
     """Plot average recapture probability vs the first scan axis.
 
     Points with no loaded atom are skipped. ``label`` defaults to
     ``exp.label`` (folder path and fixed parameters); ``threshold`` defaults
-    to ``exp.threshold``. ``plot_kwargs`` go to ``Axes.plot``.
+    to ``exp.threshold``.
+
+    Error bars are the 1 sigma binomial standard error from
+    ``exp.compute_recapture_average_stderr`` (shot noise only), and
+    ``plot_kwargs`` go to ``Axes.errorbar``. With ``errorbars=False`` only the
+    curve is drawn and ``plot_kwargs`` go to ``Axes.plot``.
     """
+    yerr = exp.compute_recapture_average_stderr(threshold) if errorbars else None
     return _plot_probability_curve(
-        exp, exp.compute_recapture_average(threshold), "Recapture Probability",
+        exp, exp.compute_recapture_average(threshold), yerr, "Recapture Probability",
         ax, label, plot_kwargs,
     )
 
 
 def plot_loading(
     exp: ExperimentData, threshold: Optional[int] = None, *,
-    ax: Optional[Axes] = None, label: Optional[str] = None, **plot_kwargs: Any,
+    ax: Optional[Axes] = None, label: Optional[str] = None, errorbars: bool = True,
+    **plot_kwargs: Any,
 ) -> Axes:
     """Plot loading probability (first image above threshold) vs the first scan axis.
 
+    Error bars are the 1 sigma binomial standard error from
+    ``exp.compute_loading_stderr`` (shot noise only), and ``plot_kwargs`` go
+    to ``Axes.errorbar``. With ``errorbars=False`` only the curve is drawn and
     ``plot_kwargs`` go to ``Axes.plot``.
     """
+    yerr = exp.compute_loading_stderr(threshold) if errorbars else None
     return _plot_probability_curve(
-        exp, exp.compute_loading_array(threshold), "Loading Probability",
+        exp, exp.compute_loading_array(threshold), yerr, "Loading Probability",
         ax, label, plot_kwargs,
     )
 

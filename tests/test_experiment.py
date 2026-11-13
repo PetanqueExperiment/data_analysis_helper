@@ -112,6 +112,32 @@ class OneAxisScanTests(ExperimentTestCase):
         self.assertEqual(average.dtype, float)
         np.testing.assert_array_equal(average, [0.625, np.nan, 1.0, np.nan])
 
+    def test_loading_stderr_is_binomial(self):
+        # Entry 0: p = 0.5 over N = 4 shots * 3 sites = 12 trials.
+        np.testing.assert_allclose(self.exp.compute_loading_stderr(),
+                                   [np.sqrt(0.5 * 0.5 / 12), np.nan, 0.0, 0.0])
+
+    def test_recapture_per_atom_stderr_is_binomial(self):
+        # Entry 0: site 0 has p = 0.75 over 4 loaded shots, site 1 has p = 0.5
+        # over 2 loaded shots, site 2 is never loaded.
+        np.testing.assert_allclose(self.exp.compute_recapture_per_atom_stderr(), [
+            [np.sqrt(0.75 * 0.25 / 4), np.sqrt(0.5 * 0.5 / 2), np.nan],
+            [np.nan, np.nan, np.nan],
+            [0.0, 0.0, 0.0],
+            [np.nan, np.nan, np.nan],
+        ])
+
+    def test_recapture_average_stderr_is_propagated_binomial(self):
+        # Entry 0: site 0 has p = 0.75 over 4 loaded shots, site 1 has p = 0.5
+        # over 2 loaded shots, site 2 is never loaded, so K = 2 sites.
+        variance_site_0 = 0.75 * 0.25 / 4
+        variance_site_1 = 0.5 * 0.5 / 2
+        expected = np.sqrt(variance_site_0 + variance_site_1) / 2
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            stderr = self.exp.compute_recapture_average_stderr()
+        np.testing.assert_allclose(stderr, [expected, np.nan, 0.0, np.nan])
+
     def test_threshold_argument_overrides_default(self):
         # Above every count: nothing is loaded anywhere.
         np.testing.assert_array_equal(self.exp.compute_loading_array(threshold=500),
@@ -308,6 +334,25 @@ class PlotSmokeTests(ExperimentTestCase):
                          str(self.exp1d.experiment_folder_path))
         self.assertIs(plot_loading(self.exp1d, ax=ax, label="loading"), ax)
         self.assertEqual(len(ax.lines), 2)  # overlays on the same axes
+
+    def test_curves_draw_the_stderr_as_error_bars(self):
+        exp = self.exp1d
+        order = np.argsort(exp.param_sets_array[:, 0])
+        for plot, values, stderr in [
+            (plot_recapture, exp.compute_recapture_average(), exp.compute_recapture_average_stderr()),
+            (plot_loading, exp.compute_loading_array(), exp.compute_loading_stderr()),
+        ]:
+            with self.subTest(plot.__name__):
+                ax = plot(exp, ax=plt.figure().gca())
+                (container,) = ax.containers
+                # Vertical bar segments run from (x, y - stderr) to (x, y + stderr).
+                segments = np.array(container.lines[2][0].get_segments())
+                np.testing.assert_allclose(segments[:, 0, 1], (values - stderr)[order])
+                np.testing.assert_allclose(segments[:, 1, 1], (values + stderr)[order])
+
+                ax = plot(exp, ax=plt.figure().gca(), errorbars=False)
+                self.assertEqual(len(ax.containers), 0)
+                self.assertEqual(len(ax.lines), 1)
 
     def test_unsorted_scan_is_plotted_in_x_order(self):
         # Manifest order 0.3, 0.1, 0.2, 0.1 (repeat); each set has a distinct recapture.

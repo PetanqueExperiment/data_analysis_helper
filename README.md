@@ -68,6 +68,9 @@ folder). `print_summary=False` silences the summary.
 | `compute_loading_array()` | Fraction of (valid shot, site) pairs loaded in image 1, per parameter set |
 | `compute_recapture_per_atom()` | Per site: shots bright in image 2 / shots loaded in image 1; shape `(param_sets, sites)` |
 | `compute_recapture_average()` | Mean of the above over sites that were loaded at least once |
+| `compute_loading_stderr()` | 1σ binomial standard error of the loading, `sqrt(p(1-p)/N)`, `N` = valid shots × sites |
+| `compute_recapture_per_atom_stderr()` | 1σ binomial standard error of each site's recapture, `sqrt(p_k(1-p_k)/n_k)`; shape `(param_sets, sites)` |
+| `compute_recapture_average_stderr()` | 1σ standard error of the average recapture: `sqrt(Σ_k p_k(1-p_k)/n_k) / K` over the `K` loaded sites, `n_k` = loaded shots of site `k` |
 | `compute_recapture_grid(x_axis=0)` | `(x_vals, y_vals, grid)` of the average recapture for a 2-axis scan |
 | `get_scan_values(axis)` | Sorted unique values of one scan axis |
 | `valid_shots()` | Boolean mask `(param_sets, shots)`, `False` for padded shots |
@@ -111,8 +114,8 @@ plot legends and titles) appends them to the folder path, e.g.
 
 | Function | Plot |
 | --- | --- |
-| `plot_recapture(exp)` | Average recapture vs the first scan axis |
-| `plot_loading(exp)` | Loading probability vs the first scan axis |
+| `plot_recapture(exp, errorbars=True)` | Average recapture vs the first scan axis, with 1σ error bars |
+| `plot_loading(exp, errorbars=True)` | Loading probability vs the first scan axis, with 1σ error bars |
 | `plot_recapture_per_atom(exp, style="map" \| "curve")` | Recapture of each site (1-axis scan) |
 | `plot_recapture_2d(exp, style="map" \| "curve", x_axis=0)` | Heatmap, or one curve per value of the other axis (2-axis scan) |
 | `plot_fluorescence(exp, image_index)` | Mean counts above / below threshold in one image |
@@ -125,8 +128,14 @@ plot legends and titles) appends them to the folder path, e.g.
 - 1D plots are drawn in increasing x order and skip points with no value.
 - Legends and titles show the absolute experiment path; pass `label=` to
   override it.
+- The error bars of `plot_recapture` / `plot_loading` are the binomial
+  standard errors of `compute_recapture_average_stderr` /
+  `compute_loading_stderr`: shot noise only, so they are zero at a probability
+  of exactly 0 or 1 and do not include site-to-site scatter. Pass
+  `errorbars=False` for the bare curve.
 - To get the plotted numbers, use the `compute_*` methods (or
-  `ax.lines[-1].get_xdata()` / `get_ydata()`).
+  `ax.lines[-1].get_xdata()` / `get_ydata()`; with error-bar caps the last
+  line is a cap, use `ax.containers[-1].lines[0]` instead).
 
 ### Styling is up to you
 
@@ -136,7 +145,8 @@ figure size or legend position. Choose them with
 - rcParams or a style sheet: `plt.style.use("lab.mplstyle")` or
   `plt.rcParams.update({...})`;
 - keyword arguments, forwarded to `Axes.plot` (curves), `Axes.pcolormesh`
-  (maps) or `Axes.errorbar` (fluorescence panels);
+  (maps) or `Axes.errorbar` (fluorescence panels, and `plot_recapture` /
+  `plot_loading` unless `errorbars=False`);
 - the returned axes or figure: `ax.set_ylim(-0.03, 1.03)`, `ax.legend(loc=(1.02, 0))`.
 
 ```python

@@ -375,6 +375,23 @@ class ExperimentData:
         with np.errstate(invalid="ignore"):
             return self._loaded(threshold).sum(axis=(1, 2)) / n_samples
 
+    def compute_loading_stderr(self, threshold: Optional[int] = None) -> np.ndarray:
+        """Standard error (1 sigma) of :meth:`compute_loading_array`.
+
+        Model: each (valid shot, site) pair is an independent Bernoulli trial
+        with the same loading probability ``p``, so the measured fraction has
+        the binomial standard error ``sqrt(p * (1 - p) / N)`` with
+        ``N = valid shots * sites``. Shot noise only: it is 0 when ``p`` is
+        exactly 0 or 1, and it ignores site-to-site differences.
+
+        Returns a float array of length ``n_param_sets`` (a probability, 0-1);
+        NaN where the parameter set has no valid shot.
+        """
+        loading = self.compute_loading_array(threshold)
+        n_samples = self.valid_shots().sum(axis=1) * self.atom_number
+        with np.errstate(invalid="ignore"):
+            return np.sqrt(loading * (1 - loading) / n_samples)
+
     def compute_recapture_per_atom(self, threshold: Optional[int] = None) -> np.ndarray:
         """Recapture probability per parameter set and site.
 
@@ -388,6 +405,24 @@ class ExperimentData:
         with np.errstate(invalid="ignore"):
             return recaptured.sum(axis=1) / loaded.sum(axis=1)
 
+    def compute_recapture_per_atom_stderr(self, threshold: Optional[int] = None) -> np.ndarray:
+        """Standard error (1 sigma) of :meth:`compute_recapture_per_atom`.
+
+        Model: for site ``k``, each of its ``n_k`` loaded shots is an
+        independent Bernoulli trial with recapture probability ``p_k``, so the
+        measured fraction has the binomial standard error
+        ``sqrt(p_k * (1 - p_k) / n_k)``. Shot noise only: it is 0 when ``p_k``
+        is exactly 0 or 1.
+
+        Returns a float array of shape ``(n_param_sets, atom_number)`` (a
+        probability, 0-1); NaN where the site was never loaded.
+        """
+        threshold = self.resolve_threshold(threshold)
+        recapture_per_atom = self.compute_recapture_per_atom(threshold)
+        n_loaded_per_atom = self._loaded(threshold).sum(axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.sqrt(recapture_per_atom * (1 - recapture_per_atom) / n_loaded_per_atom)
+
     def compute_recapture_average(self, threshold: Optional[int] = None) -> np.ndarray:
         """Recapture probability per parameter set, averaged over sites.
 
@@ -399,6 +434,32 @@ class ExperimentData:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
             return np.nanmean(recapture_per_atom, axis=1)
+
+    def compute_recapture_average_stderr(self, threshold: Optional[int] = None) -> np.ndarray:
+        """Standard error (1 sigma) of :meth:`compute_recapture_average`.
+
+        Model: for site ``k``, each of its ``n_k`` loaded shots is an
+        independent Bernoulli trial with recapture probability ``p_k``, so
+        ``p_k`` has the binomial variance ``p_k * (1 - p_k) / n_k``. The
+        average is the unweighted mean of ``p_k`` over the ``K`` sites loaded
+        at least once, and the sites are independent, so::
+
+            stderr = sqrt(sum_k p_k * (1 - p_k) / n_k) / K
+
+        Shot noise only: it is 0 when every site has ``p_k`` exactly 0 or 1,
+        and it does not include the scatter of ``p_k`` between sites.
+
+        Returns a float array of length ``n_param_sets`` (a probability, 0-1);
+        NaN where no site was loaded.
+        """
+        # sigma_k = sqrt(p_k * (1 - p_k) / n_k); NaN for sites never loaded.
+        stderr_per_atom = self.compute_recapture_per_atom_stderr(threshold)
+        variance_per_atom = stderr_per_atom**2
+        # Sites never loaded (NaN) are not part of the average, so they
+        # are left out of the sum and of K, as in compute_recapture_average.
+        n_sites_loaded = np.isfinite(stderr_per_atom).sum(axis=1)
+        with np.errstate(invalid="ignore"):
+            return np.sqrt(np.nansum(variance_per_atom, axis=1)) / n_sites_loaded
 
     def compute_recapture_grid(
         self, threshold: Optional[int] = None, *, x_axis: int = 0
