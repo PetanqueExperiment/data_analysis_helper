@@ -5,14 +5,16 @@ the arena sites follow its Gaussian profile::
 
     shift(r) = S * exp(-2 |r - center|² / w²)      w: 1/e² intensity radius
 
-Site positions are the design positions (um) of the calibrated SLM trap file,
-the same coordinates as the SLM grating: the offset of the beam center from the
-arena center is directly the grating step.
+Site positions are the design positions (um) of the calibrated SLM trap file.
+The offset of the beam center from the arena center is the step to make, in
+trap-file (x, y). The SLM grating axes are swapped with respect to these
+(see ``analysis.next_grating_um``).
 """
 
 import json
 from dataclasses import dataclass
 
+from .ramsey import ArenaFits
 import numpy as np
 from scipy.optimize import curve_fit
 
@@ -37,10 +39,18 @@ def center_site(site_xy_um):
 def min_site_spacing(site_xy_um):
     """Smallest distance (um) between two arena sites."""
     xy = np.asarray(site_xy_um, dtype=float)
-    return min(np.linalg.norm(p - q) for k, p in enumerate(xy) for q in xy[k + 1:])
+    n_sites = len(xy)
+
+    # Distance of every pair of sites (i, j), each pair counted once (j > i).
+    pair_distances_um = []
+    for i in range(n_sites):
+        for j in range(i + 1, n_sites):
+            pair_distances_um.append(np.linalg.norm(xy[i] - xy[j]))
+
+    return min(pair_distances_um)
 
 
-def ring_inhomogeneity(fits, ring_sites):
+def ring_inhomogeneity(fits : ArenaFits, ring_sites):
     """``(mean shift kHz, std / |mean|, number of sites used)`` of the reliable ring shifts.
 
     ``ring_sites``: indices of the ring sites among the arena sites. NaN (and 0
@@ -112,7 +122,7 @@ def gaussian_beam_kHz(xy_um, x0_um, y0_um, waist_um, peak_shift_kHz):
     return peak_shift_kHz * np.exp(-2 * r2 / waist_um ** 2)
 
 
-def fit_beam_center(fits, site_xy_um, *, search_margin_um=30):
+def fit_beam_center(fits : ArenaFits, site_xy_um, *, search_margin_um=30):
     """Fit a Gaussian beam to the reliable light shifts of one condition.
 
     Args:
@@ -149,5 +159,8 @@ def fit_beam_center(fits, site_xy_um, *, search_margin_um=30):
 
 
 def grating_step(beam):
-    """``(step, error)`` in um: the SLM grating move that brings the arena center onto the beam center."""
+    """``(step, error)`` in um, trap-file (x, y): beam center minus arena center.
+
+    Not directly the SLM grating change: use ``analysis.next_grating_um``.
+    """
     return beam.offset_um.copy(), beam.center_err_um.copy()

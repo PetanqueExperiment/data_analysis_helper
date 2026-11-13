@@ -16,6 +16,7 @@ Units: frequency MHz, Ramsey time T μs, light shift kHz.
 import warnings
 from dataclasses import dataclass
 
+from ..experiment import ExperimentData
 import numpy as np
 from scipy.optimize import curve_fit
 
@@ -180,14 +181,14 @@ def split_conditions(exp, frequency_axis):
 
 
 def _fit_site(name, freqs_MHz, recapture, min_fit_amplitude, fit_kwargs):
-    params, errors = fit_ramsey(freqs_MHz, recapture, **fit_kwargs)
-    if params is None:
-        params, errors = np.full(5, np.nan), np.full(5, np.nan)
-    reliable = bool(np.isfinite(params[3]) and params[1] >= min_fit_amplitude)
-    return RamseyFit(name, recapture, params, errors, reliable)
+    ramsey_params, errors = fit_ramsey(freqs_MHz, recapture, **fit_kwargs)
+    if ramsey_params is None:
+        ramsey_params, errors = np.full(5, np.nan), np.full(5, np.nan)
+    reliable = bool(np.isfinite(ramsey_params[3]) and ramsey_params[1] >= min_fit_amplitude)
+    return RamseyFit(name, recapture, ramsey_params, errors, reliable)
 
 
-def fit_arena_scans(exp, *, n_arena=7, frequency_axis=None, condition=None,
+def fit_arena_scans(exp : ExperimentData, *, n_arena=7, frequency_axis=None, condition=None,
                     min_fit_amplitude=0.15, verbose=True, **fit_kwargs):
     """Fit the reservoir and every arena site, for every condition of ``exp``.
 

@@ -5,7 +5,8 @@
 1. Ramsey fit of the reservoir average and of each arena site -> light shifts.
 2. Ring inhomogeneity: std / |mean| of the light shift of the 6 ring sites.
 3. Gaussian fit of the beam center on the trap-file positions (um).
-4. SLM grating step towards the beam center, and the next grating.
+4. Step from the arena center to the beam center (trap-file x, y), and the
+   next SLM grating (the grating axes are swapped, see ``next_grating_um``).
 
 ``report_arena_ramsey`` prints the numbers and draws one figure;
 ``analyze_arena_ramsey`` does both.
@@ -22,6 +23,23 @@ from .plots import plot_arena_fits_overlay, plot_beam_map, plot_shift_vs_distanc
 from .ramsey import ArenaFits, fit_arena_scans
 
 SLM_LABEL = "SLM_Controller"  # device label of the SLM in the sequencer's static settings
+
+
+def next_grating_um(grating_um, step_um):
+    """SLM grating (x, y) in um that brings the arena center onto the beam center.
+
+    Args:
+        grating_um: SLM grating (x, y) in um used for the scan.
+        step_um: Beam center minus arena center, in trap-file (x, y), in um.
+
+    The SLM grating axes are swapped with respect to the trap-file axes: a
+    grating change (dgx, dgy) moves the arena by (dgy, dgx) in trap-file
+    coordinates, with no sign flip (measured 2026-11-12, arena_ramsey_step0..4).
+    The step is therefore added with x and y exchanged.
+    """
+    grating_um = np.asarray(grating_um, dtype=float)
+    step_x_um, step_y_um = step_um
+    return grating_um + np.array([step_y_um, step_x_um])
 
 
 def scan_grating_um(exp):
@@ -41,10 +59,10 @@ class ArenaRamseyAnalysis:
     ring_mean_shift_kHz: float
     inhomogeneity: float          # std / |mean| of the reliable ring shifts
     n_ring_used: int              # number of reliable ring shifts
-    step_um: np.ndarray           # grating move (x, y)
+    step_um: np.ndarray           # beam center - arena center, trap-file (x, y)
     step_err_um: np.ndarray
     grating_um: np.ndarray        # current grating, None if not given
-    next_grating_um: np.ndarray   # grating + step, None if the grating is not given
+    next_grating_um: np.ndarray   # see next_grating_um() (x <-> y swap), None if the grating is not given
     fig: plt.Figure = None        # set by analyze_arena_ramsey
 
 
@@ -89,7 +107,7 @@ def compute_arena_ramsey(exp, *, condition=None, grating=None, n_arena=7, min_fi
             warnings.warn(f"Given grating ({grating[0]:.2f}, {grating[1]:.2f}) um differs from the one "
                           f"recorded in sequence.json ({recorded[0]:.2f}, {recorded[1]:.2f}) um; "
                           "using the given one.")
-    next_grating = None if grating is None else grating + step
+    next_grating = None if grating is None else next_grating_um(grating, step)
     return ArenaRamseyAnalysis(fits, beam, ring, ring_mean, inhomogeneity, n_ring_used,
                                step, step_err, grating, next_grating)
 
@@ -126,12 +144,12 @@ def report_arena_ramsey(result, *, site_styles=None, figsize=(16, 13), show=True
         step, err = result.step_um, result.step_err_um
         print()
         print(beam.summary())
-        print(f"\nStep                   = ({step[0]:+.2f} ± {err[0]:.2f}, {step[1]:+.2f} ± {err[1]:.2f}) um"
+        print(f"\nStep (trap-file x, y)  = ({step[0]:+.2f} ± {err[0]:.2f}, {step[1]:+.2f} ± {err[1]:.2f}) um"
               f"  (|step| = {np.linalg.norm(step):.2f} um)")
         if result.grating_um is not None:
             (gx, gy), (nx, ny) = result.grating_um, result.next_grating_um
             print(f"Current grating (x, y) = ({gx:.2f}, {gy:.2f}) um")
-            print(f"Next grating to try    = ({nx:.2f}, {ny:.2f}) um")
+            print(f"Next grating to try    = ({nx:.2f}, {ny:.2f}) um  (step added with x <-> y swapped)")
     return fig
 
 

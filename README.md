@@ -247,7 +247,10 @@ result = als.analyze_arena_ramsey(exp, condition={"Arena AOM amplitude": 0.05}) 
 
 The SLM grating used for the scan is read from the folder's `sequence.json`
 (`exp.read_static_settings()["SLM_Controller"]`) to print the next grating;
-pass `grating=(x, y)` only to override it.
+pass `grating=(x, y)` only to override it. The SLM grating axes are swapped
+with respect to the trap-file axes, so the next grating is the current one plus
+the step with x and y exchanged (`result.next_grating_um`); `result.step_um`
+stays in trap-file (x, y).
 
 From a Ramsey scan of the arena sites (the last `n_arena` ROIs) and the
 reservoir (all other ROIs): Ramsey fit of each site, light shift
